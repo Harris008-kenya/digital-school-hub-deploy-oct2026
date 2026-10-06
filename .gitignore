@@ -39,3 +39,26 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local databases and database backups
+*.db
+*.db-*
+*.backup
+*.backup-*
+*.sqlite
+*.sqlite3
+
+# local SQL dumps and reconciliation files
+*.sql
+
+# local AI/editor configuration
+/.agents/
+/.claude/
+/.cursor/
+/.devin/
+
+# local project notes and temporary files
+student-cookies.txt
+my-quizzes-page.txt
+check-results.cjs
+check-schools.cjs
