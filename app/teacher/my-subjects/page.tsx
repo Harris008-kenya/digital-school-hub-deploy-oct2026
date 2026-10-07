@@ -1,4 +1,3 @@
-
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentTeacher } from "@/lib/teacher-session";
@@ -23,9 +22,24 @@ export default async function TeacherMySubjectsPage() {
     }
   >();
 
+  const gradeMap = new Map<
+    string,
+    {
+      id: string;
+      level: number;
+      name: string;
+    }
+  >();
+
   for (const assignment of teacher.assignments) {
     const subject = assignment.subject;
     const grade = assignment.grade;
+
+    gradeMap.set(grade.id, {
+      id: grade.id,
+      level: grade.level,
+      name: grade.name,
+    });
 
     const existingSubject = subjectMap.get(subject.id);
 
@@ -56,13 +70,23 @@ export default async function TeacherMySubjectsPage() {
     }
   }
 
-  const subjects = Array.from(subjectMap.values()).sort((a, b) =>
-    a.name.localeCompare(b.name)
+  const subjects = Array.from(subjectMap.values()).sort(
+    (a, b) => a.name.localeCompare(b.name)
   );
 
   for (const subject of subjects) {
-    subject.grades.sort((a, b) => a.level - b.level);
+    subject.grades.sort(
+      (a, b) => a.level - b.level
+    );
   }
+
+  const grades = Array.from(gradeMap.values()).sort(
+    (a, b) => a.level - b.level
+  );
+
+  const subjectCount = subjects.length;
+  const gradeCount = grades.length;
+  const assignmentCount = teacher.assignments.length;
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
@@ -114,6 +138,50 @@ export default async function TeacherMySubjectsPage() {
       </section>
 
       <section className="mx-auto max-w-7xl px-6 py-12">
+        <div className="mb-8 grid gap-4 sm:grid-cols-3">
+          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <p className="text-sm font-medium text-slate-500">
+              Subjects
+            </p>
+
+            <p className="mt-2 text-3xl font-bold text-blue-700">
+              {subjectCount}
+            </p>
+
+            <p className="mt-1 text-sm text-slate-500">
+              Unique subjects assigned
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <p className="text-sm font-medium text-slate-500">
+              Classes
+            </p>
+
+            <p className="mt-2 text-3xl font-bold text-emerald-600">
+              {gradeCount}
+            </p>
+
+            <p className="mt-1 text-sm text-slate-500">
+              Unique grades assigned
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <p className="text-sm font-medium text-slate-500">
+              Assignments
+            </p>
+
+            <p className="mt-2 text-3xl font-bold text-slate-800">
+              {assignmentCount}
+            </p>
+
+            <p className="mt-1 text-sm text-slate-500">
+              Subject-to-grade assignments
+            </p>
+          </div>
+        </div>
+
         <div className="mb-8">
           <h3 className="text-2xl font-bold text-slate-900">
             Subjects Assigned to Me

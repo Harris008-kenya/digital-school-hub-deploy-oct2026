@@ -1,25 +1,53 @@
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 
-export const STUDENT_SESSION_COOKIE = "dsh_student_session";
+export const STUDENT_SESSION_COOKIE =
+  "dsh_student_session";
 
 export async function getCurrentStudent() {
   const cookieStore = await cookies();
-  const token = cookieStore.get(STUDENT_SESSION_COOKIE)?.value;
+
+  const token =
+    cookieStore.get(STUDENT_SESSION_COOKIE)?.value;
 
   if (!token) return null;
 
-  const session = await prisma.studentSession.findUnique({
-    where: { token },
-    include: {
-      student: {
-        include: {
-          school: true,
-          grade: true,
+  const session =
+    await prisma.studentSession.findUnique({
+      where: {
+        token,
+      },
+      select: {
+        id: true,
+        expiresAt: true,
+        student: {
+          select: {
+            id: true,
+            name: true,
+            admissionNumber: true,
+            schoolId: true,
+            gradeId: true,
+
+            school: {
+              select: {
+                id: true,
+                name: true,
+                isActive: true,
+                activationExpiryDate: true,
+              },
+            },
+
+            grade: {
+              select: {
+                id: true,
+                name: true,
+                level: true,
+              },
+            },
+          },
         },
       },
-    },
-  });
+    });
 
   if (!session) return null;
 
@@ -27,7 +55,9 @@ export async function getCurrentStudent() {
 
   if (session.expiresAt <= now) {
     await prisma.studentSession.delete({
-      where: { id: session.id },
+      where: {
+        id: session.id,
+      },
     });
 
     return null;
@@ -41,7 +71,9 @@ export async function getCurrentStudent() {
 
   if (!school.isActive || activationExpired) {
     await prisma.studentSession.delete({
-      where: { id: session.id },
+      where: {
+        id: session.id,
+      },
     });
 
     return null;

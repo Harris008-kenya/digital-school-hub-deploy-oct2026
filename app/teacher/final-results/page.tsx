@@ -11,42 +11,34 @@ type AcademicYear = {
 type Term = {
   id: string;
   name: string;
-  academicYearId: string;
+  academicYear: AcademicYear;
 };
 
 type Examination = {
   id: string;
   name: string;
-  termId: string;
   gradeId: string;
-  grade?: {
+  grade: {
     id: string;
     name: string;
     level: number;
   };
-};
-
-type Grade = {
-  id: string;
-  name: string;
-  level: number;
-};
-
-type GradeSubject = {
-  id: string;
-  gradeId: string;
-  subjectId: string;
-  subject: {
+  term: {
     id: string;
     name: string;
+    academicYear: AcademicYear;
   };
+};
+
+type Subject = {
+  subjectId: string;
+  name: string;
 };
 
 type Student = {
   id: string;
   name: string;
   admissionNumber: string | null;
-  gradeId: string;
 };
 
 type ResultRecord = {
@@ -68,8 +60,7 @@ function getExpectation(marks: number | null) {
   if (
     marks === null ||
     marks === undefined ||
-    Number.isNaN(marks) ||
-    marks <= 0
+    Number.isNaN(marks)
   ) {
     return {
       code: "—",
@@ -105,284 +96,433 @@ function getExpectation(marks: number | null) {
 }
 
 export default function TeacherFinalResultsPage() {
-  const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
-  const [terms, setTerms] = useState<Term[]>([]);
   const [examinations, setExaminations] = useState<Examination[]>([]);
-  const [grades, setGrades] = useState<Grade[]>([]);
 
   const [selectedYear, setSelectedYear] = useState("");
   const [selectedTerm, setSelectedTerm] = useState("");
   const [selectedExamination, setSelectedExamination] = useState("");
   const [selectedGrade, setSelectedGrade] = useState("");
 
-  const [subjects, setSubjects] = useState<GradeSubject[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [rows, setRows] = useState<StudentRow[]>([]);
 
-  const [loading, setLoading] = useState(false);
   const [loadingSetup, setLoadingSetup] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  /*
+   * Load the school-wide examination list.
+   *
+   * This endpoint is intentionally used instead of the old combination
+   * of /api/academic-years, /api/terms, /api/examinations and /api/grades.
+   *
+   * The backend already restricts this list to the logged-in teacher's
+   * school.
+   */
   useEffect(() => {
-    loadSetup();
-  }, []);
+    const controller = new AbortController();
 
-  async function loadSetup() {
-    try {
-      setLoadingSetup(true);
-      setError("");
+    async function loadExaminations() {
+      try {
+        setLoadingSetup(true);
+        setError("");
 
-      const [yearsResponse, termsResponse, examsResponse, gradesResponse] =
-        await Promise.all([
-          fetch("/api/academic-years"),
-          fetch("/api/terms"),
-          fetch("/api/examinations"),
-          fetch("/api/grades"),
-        ]);
+        const response = await fetch(
+          "/api/teacher-final-results",
+          {
+            method: "GET",
+            signal: controller.signal,
+            cache: "no-store",
+          }
+        );
 
-      if (
-        !yearsResponse.ok ||
-        !termsResponse.ok ||
-        !examsResponse.ok ||
-        !gradesResponse.ok
-      ) {
-        throw new Error("Failed to load Final Results information.");
-      }
+        if (!response.ok) {
+          if (response.status === 401) {
+            throw new Error(
+              "Teacher sign-in is required to view Final Results."
+            );
+          }
 
-      const yearsData = await yearsResponse.json();
-      const termsData = await termsResponse.json();
-      const examsData = await examsResponse.json();
-      const gradesData = await gradesResponse.json();
+          const data = await response.json().catch(() => null);
 
-      const years: AcademicYear[] = Array.isArray(yearsData)
-        ? yearsData
-        : yearsData.academicYears || [];
-
-      const termsList: Term[] = Array.isArray(termsData)
-        ? termsData
-        : termsData.terms || [];
-
-      const exams: Examination[] = Array.isArray(examsData)
-        ? examsData
-        : examsData.examinations || [];
-
-      const gradesList: Grade[] = Array.isArray(gradesData)
-        ? gradesData
-        : gradesData.grades || [];
-
-      setAcademicYears(years);
-      setTerms(termsList);
-      setExaminations(exams);
-      setGrades(gradesList);
-
-      if (years.length > 0) {
-        setSelectedYear(String(years[0].id));
-      }
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to load Final Results information."
-      );
-    } finally {
-      setLoadingSetup(false);
-    }
-  }
-
-  const filteredTerms = useMemo(() => {
-    if (!selectedYear) return [];
-
-    return terms.filter(
-      (term) => String(term.academicYearId) === String(selectedYear)
-    );
-  }, [terms, selectedYear]);
-
-  const filteredExaminations = useMemo(() => {
-    if (!selectedTerm) return [];
-
-    return examinations.filter(
-      (exam) => String(exam.termId) === String(selectedTerm)
-    );
-  }, [examinations, selectedTerm]);
-
-  const filteredGrades = useMemo(() => {
-    if (!selectedExamination) return [];
-
-    const exam = examinations.find(
-      (item) => String(item.id) === String(selectedExamination)
-    );
-
-    if (!exam) return [];
-
-    return grades.filter(
-      (grade) => String(grade.id) === String(exam.gradeId)
-    );
-  }, [examinations, grades, selectedExamination]);
-
-  useEffect(() => {
-    if (filteredTerms.length > 0) {
-      setSelectedTerm(String(filteredTerms[0].id));
-    } else {
-      setSelectedTerm("");
-    }
-  }, [selectedYear, filteredTerms]);
-
-  useEffect(() => {
-    if (filteredExaminations.length > 0) {
-      setSelectedExamination(String(filteredExaminations[0].id));
-    } else {
-      setSelectedExamination("");
-    }
-  }, [selectedTerm, filteredExaminations]);
-
-  useEffect(() => {
-    if (filteredGrades.length > 0) {
-      setSelectedGrade(String(filteredGrades[0].id));
-    } else {
-      setSelectedGrade("");
-    }
-  }, [selectedExamination, filteredGrades]);
-
-  useEffect(() => {
-    if (selectedExamination && selectedGrade) {
-      loadFinalResults();
-    } else {
-      setSubjects([]);
-      setRows([]);
-    }
-  }, [selectedExamination, selectedGrade]);
-
-  async function loadFinalResults() {
-    try {
-      setLoading(true);
-      setError("");
-
-      const response = await fetch(
-        `/api/final-results?examinationId=${encodeURIComponent(
-          selectedExamination
-        )}&gradeId=${encodeURIComponent(selectedGrade)}`
-      );
-
-      if (!response.ok) {
-        if (response.status === 401) {
           throw new Error(
-            "Teacher sign-in is required to view Final Results."
+            data?.error ||
+              "Failed to load Final Results information."
           );
         }
 
-        const data = await response.json().catch(() => null);
+        const data = await response.json();
 
-        throw new Error(
-          data?.error || "Failed to load protected Final Results."
+        const list: Examination[] = Array.isArray(
+          data.examinations
+        )
+          ? data.examinations
+          : [];
+
+        setExaminations(list);
+
+        if (list.length > 0) {
+          const first = list[0];
+
+          setSelectedYear(String(first.term.academicYear.id));
+          setSelectedTerm(String(first.term.id));
+          setSelectedExamination(String(first.id));
+          setSelectedGrade(String(first.grade.id));
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          return;
+        }
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load Final Results information."
         );
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoadingSetup(false);
+        }
       }
+    }
 
-      const data = await response.json();
+    loadExaminations();
 
-      const gradeSubjects: GradeSubject[] = Array.isArray(
-        data.gradeSubjects
-      )
-        ? data.gradeSubjects
-        : [];
+    return () => controller.abort();
+  }, []);
 
-      const students: Student[] = Array.isArray(data.students)
-        ? data.students
-        : [];
+  /*
+   * Build academic years directly from the examinations returned
+   * by the school-wide final-results endpoint.
+   */
+  const academicYears = useMemo<AcademicYear[]>(() => {
+    const map = new Map<string, AcademicYear>();
 
-      const results: ResultRecord[] = Array.isArray(data.results)
-        ? data.results
-        : [];
+    for (const exam of examinations) {
+      map.set(String(exam.term.academicYear.id), {
+        id: exam.term.academicYear.id,
+        year: exam.term.academicYear.year,
+      });
+    }
 
-      setSubjects(gradeSubjects);
+    return Array.from(map.values()).sort(
+      (a, b) => b.year - a.year
+    );
+  }, [examinations]);
 
-      const resultMap = new Map<string, number>();
+  /*
+   * Terms belonging to the selected academic year.
+   */
+  const filteredTerms = useMemo<Term[]>(() => {
+    if (!selectedYear) {
+      return [];
+    }
 
-      for (const result of results) {
-        resultMap.set(
-          `${result.studentId}_${result.subjectId}`,
-          result.marks
+    const map = new Map<string, Term>();
+
+    for (const exam of examinations) {
+      if (
+        String(exam.term.academicYear.id) ===
+        String(selectedYear)
+      ) {
+        map.set(String(exam.term.id), {
+          id: exam.term.id,
+          name: exam.term.name,
+          academicYear: exam.term.academicYear,
+        });
+      }
+    }
+
+    return Array.from(map.values());
+  }, [examinations, selectedYear]);
+
+  /*
+   * Examinations belonging to the selected academic year and term.
+   */
+  const filteredExaminations = useMemo(() => {
+    if (!selectedYear || !selectedTerm) {
+      return [];
+    }
+
+    return examinations.filter(
+      (exam) =>
+        String(exam.term.academicYear.id) ===
+          String(selectedYear) &&
+        String(exam.term.id) === String(selectedTerm)
+    );
+  }, [examinations, selectedYear, selectedTerm]);
+
+  /*
+   * The selected examination determines the grade.
+   */
+  const filteredGrades = useMemo(() => {
+    if (!selectedExamination) {
+      return [];
+    }
+
+    const exam = examinations.find(
+      (item) =>
+        String(item.id) === String(selectedExamination)
+    );
+
+    if (!exam) {
+      return [];
+    }
+
+    return [exam.grade];
+  }, [examinations, selectedExamination]);
+
+  /*
+   * Keep the selected term valid when the academic year changes.
+   */
+  useEffect(() => {
+    if (!selectedYear) {
+      setSelectedTerm("");
+      return;
+    }
+
+    const exists = filteredTerms.some(
+      (term) => String(term.id) === String(selectedTerm)
+    );
+
+    if (!exists) {
+      setSelectedTerm(
+        filteredTerms.length > 0
+          ? String(filteredTerms[0].id)
+          : ""
+      );
+    }
+  }, [selectedYear, filteredTerms, selectedTerm]);
+
+  /*
+   * Keep the selected examination valid when the term changes.
+   */
+  useEffect(() => {
+    const exists = filteredExaminations.some(
+      (exam) =>
+        String(exam.id) === String(selectedExamination)
+    );
+
+    if (!exists) {
+      setSelectedExamination(
+        filteredExaminations.length > 0
+          ? String(filteredExaminations[0].id)
+          : ""
+      );
+    }
+  }, [
+    filteredExaminations,
+    selectedExamination,
+  ]);
+
+  /*
+   * The grade is automatically determined by the selected
+   * examination.
+   */
+  useEffect(() => {
+    const exam = examinations.find(
+      (item) =>
+        String(item.id) === String(selectedExamination)
+    );
+
+    if (exam) {
+      setSelectedGrade(String(exam.grade.id));
+    } else {
+      setSelectedGrade("");
+    }
+  }, [selectedExamination, examinations]);
+
+  /*
+   * Load the actual final results for the selected examination.
+   */
+  useEffect(() => {
+    if (!selectedExamination) {
+      setSubjects([]);
+      setRows([]);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function loadFinalResults() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await fetch(
+          `/api/teacher-final-results?examinationId=${encodeURIComponent(
+            selectedExamination
+          )}`,
+          {
+            method: "GET",
+            signal: controller.signal,
+            cache: "no-store",
+          }
         );
-      }
 
-      const calculatedRows: StudentRow[] = students.map((student) => {
-        const marks: Record<string, number | null> = {};
+        if (!response.ok) {
+          if (response.status === 401) {
+            throw new Error(
+              "Teacher sign-in is required to view Final Results."
+            );
+          }
 
-        let totalMarks = 0;
-        let totalPoints = 0;
+          const data = await response.json().catch(() => null);
 
-        for (const subject of gradeSubjects) {
-          const key = `${student.id}_${subject.subjectId}`;
-          const value = resultMap.get(key);
+          throw new Error(
+            data?.error ||
+              "Failed to load Final Results."
+          );
+        }
 
-          const studentMarks =
-            typeof value === "number" && !Number.isNaN(value)
-              ? value
-              : null;
+        const data = await response.json();
 
-          marks[subject.subjectId] = studentMarks;
+        const gradeSubjects: Subject[] = Array.isArray(
+          data.subjects
+        )
+          ? data.subjects
+          : [];
 
-          if (studentMarks !== null) {
-            totalMarks += studentMarks;
-            totalPoints += getExpectation(studentMarks).points;
+        const students: Student[] = Array.isArray(
+          data.students
+        )
+          ? data.students
+          : [];
+
+        const results: ResultRecord[] = Array.isArray(
+          data.results
+        )
+          ? data.results
+          : [];
+
+        setSubjects(gradeSubjects);
+
+        const resultMap = new Map<string, number>();
+
+        for (const result of results) {
+          if (
+            typeof result.marks === "number" &&
+            !Number.isNaN(result.marks)
+          ) {
+            resultMap.set(
+              `${result.studentId}_${result.subjectId}`,
+              result.marks
+            );
           }
         }
 
-        return {
-          student,
-          marks,
-          totalMarks,
-          totalPoints,
-          position: 0,
-        };
-      });
+        const calculatedRows: StudentRow[] =
+          students.map((student) => {
+            const marks: Record<string, number | null> =
+              {};
 
-      calculatedRows.sort((a, b) => {
-        if (b.totalMarks !== a.totalMarks) {
-          return b.totalMarks - a.totalMarks;
+            let totalMarks = 0;
+            let totalPoints = 0;
+
+            for (const subject of gradeSubjects) {
+              const key = `${student.id}_${subject.subjectId}`;
+              const value = resultMap.get(key);
+
+              const studentMarks =
+                typeof value === "number" &&
+                !Number.isNaN(value)
+                  ? value
+                  : null;
+
+              marks[subject.subjectId] = studentMarks;
+
+              if (studentMarks !== null) {
+                totalMarks += studentMarks;
+                totalPoints +=
+                  getExpectation(studentMarks).points;
+              }
+            }
+
+            return {
+              student,
+              marks,
+              totalMarks,
+              totalPoints,
+              position: 0,
+            };
+          });
+
+        /*
+         * Highest total marks first.
+         *
+         * Competition ranking:
+         * 1, 2, 2, 4
+         */
+        calculatedRows.sort((a, b) => {
+          if (b.totalMarks !== a.totalMarks) {
+            return b.totalMarks - a.totalMarks;
+          }
+
+          return a.student.name.localeCompare(
+            b.student.name
+          );
+        });
+
+        let previousMarks: number | null = null;
+        let previousPosition = 0;
+
+        calculatedRows.forEach((row, index) => {
+          if (
+            previousMarks !== null &&
+            previousMarks === row.totalMarks
+          ) {
+            row.position = previousPosition;
+          } else {
+            row.position = index + 1;
+            previousPosition = row.position;
+            previousMarks = row.totalMarks;
+          }
+        });
+
+        setRows(calculatedRows);
+      } catch (err) {
+        if (
+          err instanceof DOMException &&
+          err.name === "AbortError"
+        ) {
+          return;
         }
 
-        return a.student.name.localeCompare(b.student.name);
-      });
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load Final Results."
+        );
 
-      let previousMarks: number | null = null;
-      let previousPosition = 0;
-
-      calculatedRows.forEach((row, index) => {
-        if (previousMarks === row.totalMarks) {
-          row.position = previousPosition;
-        } else {
-          row.position = index + 1;
-          previousPosition = row.position;
-          previousMarks = row.totalMarks;
+        setSubjects([]);
+        setRows([]);
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
         }
-      });
-
-      setRows(calculatedRows);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to load Final Results."
-      );
-      setRows([]);
-    } finally {
-      setLoading(false);
+      }
     }
-  }
+
+    loadFinalResults();
+
+    return () => controller.abort();
+  }, [selectedExamination]);
 
   const selectedExam = examinations.find(
-    (exam) => String(exam.id) === String(selectedExamination)
+    (exam) =>
+      String(exam.id) === String(selectedExamination)
   );
 
-  const selectedGradeInfo = grades.find(
-    (grade) => String(grade.id) === String(selectedGrade)
-  );
+  const selectedGradeInfo = selectedExam?.grade;
 
   const selectedYearInfo = academicYears.find(
-    (year) => String(year.id) === String(selectedYear)
+    (year) =>
+      String(year.id) === String(selectedYear)
   );
 
-  const selectedTermInfo = terms.find(
-    (term) => String(term.id) === String(selectedTerm)
+  const selectedTermInfo = filteredTerms.find(
+    (term) =>
+      String(term.id) === String(selectedTerm)
   );
 
   if (loadingSetup) {
@@ -433,10 +573,14 @@ export default function TeacherFinalResultsPage() {
 
               <select
                 value={selectedYear}
-                onChange={(e) => setSelectedYear(e.target.value)}
+                onChange={(e) =>
+                  setSelectedYear(e.target.value)
+                }
                 className="w-full rounded-lg border-2 border-slate-400 bg-white px-3 py-3 font-semibold text-slate-950 outline-none focus:border-slate-900"
               >
-                <option value="">Select Academic Year</option>
+                <option value="">
+                  Select Academic Year
+                </option>
 
                 {academicYears.map((year) => (
                   <option key={year.id} value={year.id}>
@@ -453,10 +597,14 @@ export default function TeacherFinalResultsPage() {
 
               <select
                 value={selectedTerm}
-                onChange={(e) => setSelectedTerm(e.target.value)}
+                onChange={(e) =>
+                  setSelectedTerm(e.target.value)
+                }
                 className="w-full rounded-lg border-2 border-slate-400 bg-white px-3 py-3 font-semibold text-slate-950 outline-none focus:border-slate-900"
               >
-                <option value="">Select Term</option>
+                <option value="">
+                  Select Term
+                </option>
 
                 {filteredTerms.map((term) => (
                   <option key={term.id} value={term.id}>
@@ -473,14 +621,18 @@ export default function TeacherFinalResultsPage() {
 
               <select
                 value={selectedExamination}
-                onChange={(e) => setSelectedExamination(e.target.value)}
+                onChange={(e) =>
+                  setSelectedExamination(e.target.value)
+                }
                 className="w-full rounded-lg border-2 border-slate-400 bg-white px-3 py-3 font-semibold text-slate-950 outline-none focus:border-slate-900"
               >
-                <option value="">Select Examination</option>
+                <option value="">
+                  Select Examination
+                </option>
 
                 {filteredExaminations.map((exam) => (
                   <option key={exam.id} value={exam.id}>
-                    {exam.name}
+                    {exam.name} — {exam.grade.name}
                   </option>
                 ))}
               </select>
@@ -493,10 +645,14 @@ export default function TeacherFinalResultsPage() {
 
               <select
                 value={selectedGrade}
-                onChange={(e) => setSelectedGrade(e.target.value)}
+                onChange={(e) =>
+                  setSelectedGrade(e.target.value)
+                }
                 className="w-full rounded-lg border-2 border-slate-400 bg-white px-3 py-3 font-semibold text-slate-950 outline-none focus:border-slate-900"
               >
-                <option value="">Select Grade</option>
+                <option value="">
+                  Select Grade
+                </option>
 
                 {filteredGrades.map((grade) => (
                   <option key={grade.id} value={grade.id}>
@@ -520,146 +676,155 @@ export default function TeacherFinalResultsPage() {
           </div>
         )}
 
-        {!loading && selectedExamination && selectedGrade && (
-          <div className="rounded-xl bg-white shadow">
-            <div className="border-b-2 border-slate-300 p-6">
-              <h2 className="text-2xl font-extrabold text-slate-950">
-                {selectedGradeInfo?.name || "Grade"}
-              </h2>
+        {!loading &&
+          selectedExamination &&
+          selectedGrade && (
+            <div className="rounded-xl bg-white shadow">
+              <div className="border-b-2 border-slate-300 p-6">
+                <h2 className="text-2xl font-extrabold text-slate-950">
+                  {selectedGradeInfo?.name || "Grade"}
+                </h2>
 
-              <div className="mt-2 flex flex-wrap gap-x-6 gap-y-2 text-sm font-bold text-slate-800">
-                <span>
-                  Academic Year: {selectedYearInfo?.year || "—"}
-                </span>
+                <div className="mt-2 flex flex-wrap gap-x-6 gap-y-2 text-sm font-bold text-slate-800">
+                  <span>
+                    Academic Year:{" "}
+                    {selectedYearInfo?.year || "—"}
+                  </span>
 
-                <span>
-                  Term: {selectedTermInfo?.name || "—"}
-                </span>
+                  <span>
+                    Term: {selectedTermInfo?.name || "—"}
+                  </span>
 
-                <span>
-                  Examination: {selectedExam?.name || "—"}
-                </span>
+                  <span>
+                    Examination:{" "}
+                    {selectedExam?.name || "—"}
+                  </span>
 
-                <span>
-                  Learners: {rows.length}
-                </span>
+                  <span>
+                    Learners: {rows.length}
+                  </span>
+                </div>
               </div>
-            </div>
 
-            {rows.length === 0 ? (
-              <div className="p-8 text-center">
-                <p className="font-bold text-slate-800">
-                  No final results are available for the selected
-                  examination.
-                </p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-max border-collapse">
-                  <thead>
-                    <tr className="bg-slate-900 text-white">
-                      <th className="border border-slate-600 px-4 py-3 text-left font-extrabold">
-                        No.
-                      </th>
-
-                      <th className="border border-slate-600 px-4 py-3 text-left font-extrabold">
-                        Admission No.
-                      </th>
-
-                      <th className="border border-slate-600 px-4 py-3 text-left font-extrabold">
-                        Learner Name
-                      </th>
-
-                      {subjects.map((subject) => (
-                        <th
-                          key={subject.subjectId}
-                          className="border border-slate-600 px-4 py-3 text-center font-extrabold"
-                        >
-                          <div>{subject.subject.name}</div>
-                          <div className="mt-1 text-xs font-semibold text-slate-200">
-                            Mark / Exp.
-                          </div>
+              {rows.length === 0 ? (
+                <div className="p-8 text-center">
+                  <p className="font-bold text-slate-800">
+                    No final results are available for the
+                    selected examination.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-max border-collapse">
+                    <thead>
+                      <tr className="bg-slate-900 text-white">
+                        <th className="border border-slate-600 px-4 py-3 text-left font-extrabold">
+                          No.
                         </th>
-                      ))}
 
-                      <th className="border border-slate-600 px-4 py-3 text-center font-extrabold">
-                        Total Marks
-                      </th>
+                        <th className="border border-slate-600 px-4 py-3 text-left font-extrabold">
+                          Admission No.
+                        </th>
 
-                      <th className="border border-slate-600 px-4 py-3 text-center font-extrabold">
-                        Total Points
-                      </th>
+                        <th className="border border-slate-600 px-4 py-3 text-left font-extrabold">
+                          Learner Name
+                        </th>
 
-                      <th className="border border-slate-600 px-4 py-3 text-center font-extrabold">
-                        POS
-                      </th>
-                    </tr>
-                  </thead>
+                        {subjects.map((subject) => (
+                          <th
+                            key={subject.subjectId}
+                            className="border border-slate-600 px-4 py-3 text-center font-extrabold"
+                          >
+                            <div>{subject.name}</div>
 
-                  <tbody>
-                    {rows.map((row, index) => (
-                      <tr
-                        key={row.student.id}
-                        className={
-                          index % 2 === 0
-                            ? "bg-white"
-                            : "bg-slate-100"
-                        }
-                      >
-                        <td className="border border-slate-300 px-4 py-3 text-center font-bold text-slate-950">
-                          {index + 1}
-                        </td>
+                            <div className="mt-1 text-xs font-semibold text-slate-200">
+                              Mark / Exp.
+                            </div>
+                          </th>
+                        ))}
 
-                        <td className="border border-slate-300 px-4 py-3 font-bold text-slate-950">
-                          {row.student.admissionNumber || "—"}
-                        </td>
+                        <th className="border border-slate-600 px-4 py-3 text-center font-extrabold">
+                          Total Marks
+                        </th>
 
-                        <td className="border border-slate-300 px-4 py-3 font-extrabold text-slate-950">
-                          {row.student.name}
-                        </td>
+                        <th className="border border-slate-600 px-4 py-3 text-center font-extrabold">
+                          Total Points
+                        </th>
 
-                        {subjects.map((subject) => {
-                          const marks = row.marks[subject.subjectId];
-                          const expectation = getExpectation(marks);
-
-                          return (
-                            <td
-                              key={subject.subjectId}
-                              className="border border-slate-300 px-4 py-3 text-center"
-                            >
-                              <div className="font-extrabold text-slate-950">
-                                {marks === null ||
-                                marks === undefined
-                                  ? "—"
-                                  : marks}
-                              </div>
-
-                              <div className="font-bold text-slate-700">
-                                {expectation.code}
-                              </div>
-                            </td>
-                          );
-                        })}
-
-                        <td className="border border-slate-300 px-4 py-3 text-center font-extrabold text-slate-950">
-                          {row.totalMarks}
-                        </td>
-
-                        <td className="border border-slate-300 px-4 py-3 text-center font-extrabold text-slate-950">
-                          {row.totalPoints}
-                        </td>
-
-                        <td className="border border-slate-300 px-4 py-3 text-center text-lg font-extrabold text-slate-950">
-                          {row.position}
-                        </td>
+                        <th className="border border-slate-600 px-4 py-3 text-center font-extrabold">
+                          POS
+                        </th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
+                    </thead>
+
+                    <tbody>
+                      {rows.map((row, index) => (
+                        <tr
+                          key={row.student.id}
+                          className={
+                            index % 2 === 0
+                              ? "bg-white"
+                              : "bg-slate-100"
+                          }
+                        >
+                          <td className="border border-slate-300 px-4 py-3 text-center font-bold text-slate-950">
+                            {index + 1}
+                          </td>
+
+                          <td className="border border-slate-300 px-4 py-3 font-bold text-slate-950">
+                            {row.student.admissionNumber ||
+                              "—"}
+                          </td>
+
+                          <td className="border border-slate-300 px-4 py-3 font-extrabold text-slate-950">
+                            {row.student.name}
+                          </td>
+
+                          {subjects.map((subject) => {
+                            const marks =
+                              row.marks[subject.subjectId];
+
+                            const expectation =
+                              getExpectation(marks);
+
+                            return (
+                              <td
+                                key={subject.subjectId}
+                                className="border border-slate-300 px-4 py-3 text-center"
+                              >
+                                <div className="font-extrabold text-slate-950">
+                                  {marks === null ||
+                                  marks === undefined
+                                    ? "—"
+                                    : marks}
+                                </div>
+
+                                <div className="font-bold text-slate-700">
+                                  {expectation.code}
+                                </div>
+                              </td>
+                            );
+                          })}
+
+                          <td className="border border-slate-300 px-4 py-3 text-center font-extrabold text-slate-950">
+                            {row.totalMarks}
+                          </td>
+
+                          <td className="border border-slate-300 px-4 py-3 text-center font-extrabold text-slate-950">
+                            {row.totalPoints}
+                          </td>
+
+                          <td className="border border-slate-300 px-4 py-3 text-center text-lg font-extrabold text-slate-950">
+                            {row.position}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
       </div>
     </main>
   );

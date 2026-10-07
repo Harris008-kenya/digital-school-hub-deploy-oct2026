@@ -59,6 +59,12 @@ type ResultRecord = {
   marks: number;
 };
 
+type FinalStudent = {
+  id: string;
+  name: string;
+  admissionNumber: string | null;
+};
+
 type StudentRow = {
   studentId: string;
   admissionNumber: string;
@@ -70,37 +76,44 @@ type StudentRow = {
 };
 
 function getExpectation(marks: number | null) {
-  if (marks === null || !Number.isFinite(marks) || marks <= 0) {
+  if (marks === null || !Number.isFinite(marks)) {
     return {
       code: "—",
       points: 0,
     };
   }
 
-  if (marks >= 75) {
+  if (marks >= 75 && marks <= 100) {
     return {
       code: "EE",
       points: 8,
     };
   }
 
-  if (marks >= 51) {
+  if (marks >= 51 && marks <= 74) {
     return {
       code: "ME",
       points: 6,
     };
   }
 
-  if (marks >= 25) {
+  if (marks >= 25 && marks <= 50) {
     return {
       code: "AE",
       points: 4,
     };
   }
 
+  if (marks >= 0 && marks <= 24) {
+    return {
+      code: "BE",
+      points: 2,
+    };
+  }
+
   return {
-    code: "BE",
-    points: 2,
+    code: "—",
+    points: 0,
   };
 }
 
@@ -108,6 +121,18 @@ export default function TeacherResultsPage() {
   const [teacherName, setTeacherName] = useState("");
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [examinations, setExaminations] = useState<Examination[]>([]);
+
+  /*
+   * This is deliberately separate from "examinations".
+   *
+   * "examinations" comes from /api/teacher-results and is
+   * restricted to grades assigned to this teacher.
+   *
+   * "finalExaminations" comes from /api/teacher-final-results
+   * and contains examinations from the teacher's whole school.
+   */
+  const [finalExaminations, setFinalExaminations] =
+    useState<Examination[]>([]);
 
   const [assignmentId, setAssignmentId] = useState("");
   const [examinationId, setExaminationId] = useState("");
@@ -122,64 +147,203 @@ export default function TeacherResultsPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
-  const [finalExaminationId, setFinalExaminationId] = useState("");
-  const [finalSubjectResults, setFinalSubjectResults] = useState<
-    SubjectResult[]
-  >([]);
-  const [finalStudents, setFinalStudents] = useState<
-    {
-      id: string;
-      name: string;
-      admissionNumber: string | null;
-    }[]
-  >([]);
-  const [finalLoading, setFinalLoading] = useState(false);
-  const [finalError, setFinalError] = useState("");
+  /*
+   * Final results are intentionally NOT loaded automatically.
+   * The teacher must select an examination first.
+   */
+  const [finalExaminationId, setFinalExaminationId] =
+    useState("");
 
+  const [finalSubjectResults, setFinalSubjectResults] =
+    useState<SubjectResult[]>([]);
+
+  const [finalStudents, setFinalStudents] =
+    useState<FinalStudent[]>([]);
+
+  const [finalLoading, setFinalLoading] =
+    useState(false);
+
+  const [finalError, setFinalError] =
+    useState("");
+
+  /*
+   * Initial teacher data.
+   *
+   * This endpoint is used only for:
+   * - teacher information
+   * - teacher assignments
+   * - examinations for assigned grades
+   *
+   * It is NOT used for school-wide final-results access.
+   */
   useEffect(() => {
+    const controller = new AbortController();
+
     async function loadTeacherData() {
       try {
         setLoading(true);
         setError("");
 
-        const response = await fetch("/api/teacher-results", {
-          cache: "no-store",
-        });
+        const response = await fetch(
+          "/api/teacher-results",
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
 
         const data = await response.json();
 
         if (!response.ok) {
-          throw new Error(data.error || "Failed to load teacher results");
+          throw new Error(
+            data.error ||
+              "Failed to load teacher results",
+          );
         }
 
-        setTeacherName(data.teacher?.name || "");
-        setAssignments(data.teacher?.assignments || []);
-        setExaminations(data.examinations || []);
+        const nextAssignments: Assignment[] =
+          Array.isArray(data.teacher?.assignments)
+            ? data.teacher.assignments
+            : [];
 
-        if (data.teacher?.assignments?.length > 0) {
-          setAssignmentId(data.teacher.assignments[0].id);
+        const nextExaminations: Examination[] =
+          Array.isArray(data.examinations)
+            ? data.examinations
+            : [];
+
+        setTeacherName(
+          data.teacher?.name || "",
+        );
+
+        setAssignments(nextAssignments);
+        setExaminations(nextExaminations);
+
+        /*
+         * Select the first assignment and an examination
+         * belonging to that assignment's grade.
+         */
+        if (nextAssignments.length > 0) {
+          const firstAssignment =
+            nextAssignments[0];
+
+          setAssignmentId(
+            firstAssignment.id,
+          );
+
+          const firstExamination =
+            nextExaminations.find(
+              (examination) =>
+                examination.gradeId ===
+                firstAssignment.gradeId,
+            );
+
+          setExaminationId(
+            firstExamination?.id || "",
+          );
+        } else {
+          setAssignmentId("");
+          setExaminationId("");
         }
 
-        if (data.examinations?.length > 0) {
-          setExaminationId(data.examinations[0].id);
-          setFinalExaminationId(data.examinations[0].id);
-        }
+        /*
+         * Final Results intentionally starts empty.
+         */
+        setFinalExaminationId("");
       } catch (err) {
+        if (
+          err instanceof DOMException &&
+          err.name === "AbortError"
+        ) {
+          return;
+        }
+
         setError(
           err instanceof Error
             ? err.message
             : "Failed to load teacher results",
         );
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
     }
 
     loadTeacherData();
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  /*
+   * Load the lightweight school-wide examination list
+   * for the Final Grade Results dropdown.
+   *
+   * This does NOT load students or marks.
+   *
+   * The API itself enforces that the teacher can only
+   * see examinations belonging to their own school.
+   */
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadFinalExaminations() {
+      try {
+        const response = await fetch(
+          "/api/teacher-final-results",
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.error ||
+              "Failed to load school examinations",
+          );
+        }
+
+        const nextFinalExaminations: Examination[] =
+          Array.isArray(data.examinations)
+            ? data.examinations
+            : [];
+
+        setFinalExaminations(
+          nextFinalExaminations,
+        );
+      } catch (err) {
+        if (
+          err instanceof DOMException &&
+          err.name === "AbortError"
+        ) {
+          return;
+        }
+
+        setFinalError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load school examinations",
+        );
+      }
+    }
+
+    loadFinalExaminations();
+
+    return () => {
+      controller.abort();
+    };
   }, []);
 
   const selectedAssignment = useMemo(
-    () => assignments.find((assignment) => assignment.id === assignmentId),
+    () =>
+      assignments.find(
+        (assignment) =>
+          assignment.id === assignmentId,
+      ),
     [assignments, assignmentId],
   );
 
@@ -189,47 +353,106 @@ export default function TeacherResultsPage() {
     }
 
     return examinations.filter(
-      (examination) => examination.gradeId === selectedAssignment.gradeId,
+      (examination) =>
+        examination.gradeId ===
+        selectedAssignment.gradeId,
     );
-  }, [examinations, selectedAssignment]);
+  }, [
+    examinations,
+    selectedAssignment,
+  ]);
 
   const selectedExamination = useMemo(
     () =>
       examinations.find(
-        (examination) => examination.id === examinationId,
+        (examination) =>
+          examination.id === examinationId,
       ),
     [examinations, examinationId],
   );
 
-  const selectedFinalExamination = useMemo(
-    () =>
-      examinations.find(
-        (examination) => examination.id === finalExaminationId,
-      ),
-    [examinations, finalExaminationId],
-  );
+  const selectedFinalExamination =
+    useMemo(
+      () =>
+        finalExaminations.find(
+          (examination) =>
+            examination.id ===
+            finalExaminationId,
+        ),
+      [
+        finalExaminations,
+        finalExaminationId,
+      ],
+    );
 
-  useEffect(() => {
-    if (!selectedAssignment) {
+  /*
+   * When the teacher changes the assigned subject,
+   * automatically choose the first examination
+   * belonging to that subject's grade.
+   */
+  function handleAssignmentChange(
+    nextAssignmentId: string,
+  ) {
+    setAssignmentId(nextAssignmentId);
+
+    const nextAssignment =
+      assignments.find(
+        (assignment) =>
+          assignment.id ===
+          nextAssignmentId,
+      );
+
+    if (!nextAssignment) {
+      setExaminationId("");
+      setRows([]);
+      setMarks({});
       return;
     }
 
-    const available = examinations.filter(
-      (examination) => examination.gradeId === selectedAssignment.gradeId,
+    const firstExamination =
+      examinations.find(
+        (examination) =>
+          examination.gradeId ===
+          nextAssignment.gradeId,
+      );
+
+    setExaminationId(
+      firstExamination?.id || "",
     );
 
-    if (
-      available.length > 0 &&
-      !available.some((examination) => examination.id === examinationId)
-    ) {
-      setExaminationId(available[0].id);
-    }
-  }, [selectedAssignment, examinations, examinationId]);
+    setRows([]);
+    setMarks({});
+    setError("");
+    setMessage("");
+  }
 
+  /*
+   * Load the editable marks sheet.
+   *
+   * A request is cancelled if the teacher changes
+   * the selected subject/examination before the
+   * previous request finishes.
+   */
   useEffect(() => {
+    const controller = new AbortController();
+
     async function loadMarksSheet() {
-      if (!selectedAssignment || !examinationId) {
+      if (
+        !selectedAssignment ||
+        !examinationId
+      ) {
         setRows([]);
+        setMarks({});
+        return;
+      }
+
+      if (
+        selectedExamination &&
+        selectedExamination.gradeId !==
+          selectedAssignment.gradeId
+      ) {
+        setRows([]);
+        setMarks({});
         return;
       }
 
@@ -241,49 +464,269 @@ export default function TeacherResultsPage() {
         const response = await fetch(
           `/api/teacher-results?examinationId=${encodeURIComponent(
             examinationId,
-          )}&subjectId=${encodeURIComponent(selectedAssignment.subjectId)}`,
+          )}&subjectId=${encodeURIComponent(
+            selectedAssignment.subjectId,
+          )}`,
           {
             cache: "no-store",
+            signal: controller.signal,
           },
         );
 
         const data = await response.json();
 
         if (!response.ok) {
-          throw new Error(data.error || "Failed to load marks sheet");
+          throw new Error(
+            data.error ||
+              "Failed to load marks sheet",
+          );
         }
 
-        const sheetRows: SheetRow[] = data.students || [];
+        const sheetRows: SheetRow[] =
+          Array.isArray(data.students)
+            ? data.students
+            : [];
 
         setRows(sheetRows);
 
-        const nextMarks: Record<string, string> = {};
+        const nextMarks: Record<
+          string,
+          string
+        > = {};
 
         for (const row of sheetRows) {
           nextMarks[row.student.id] =
-            row.result?.marks !== undefined && row.result?.marks !== null
+            row.result?.marks !== undefined &&
+            row.result?.marks !== null
               ? String(row.result.marks)
               : "";
         }
 
         setMarks(nextMarks);
       } catch (err) {
+        if (
+          err instanceof DOMException &&
+          err.name === "AbortError"
+        ) {
+          return;
+        }
+
         setError(
           err instanceof Error
             ? err.message
             : "Failed to load marks sheet",
         );
       } finally {
-        setSheetLoading(false);
+        if (!controller.signal.aborted) {
+          setSheetLoading(false);
+        }
       }
     }
 
     loadMarksSheet();
-  }, [selectedAssignment, examinationId]);
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    selectedAssignment,
+    examinationId,
+    selectedExamination,
+  ]);
+
+  /*
+   * Shared final-results loader.
+   *
+   * This removes the previous duplicate final-results
+   * transformation logic.
+   */
+  async function loadFinalResults(
+    examId: string,
+    signal?: AbortSignal,
+  ) {
+    if (!examId) {
+      setFinalSubjectResults([]);
+      setFinalStudents([]);
+      return;
+    }
+
+    try {
+      setFinalLoading(true);
+      setFinalError("");
+
+      const response = await fetch(
+        `/api/teacher-final-results?examinationId=${encodeURIComponent(
+          examId,
+        )}`,
+        {
+          cache: "no-store",
+          signal,
+        },
+      );
+
+      const data =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error ||
+            "Failed to load complete final results",
+        );
+      }
+
+      const students: FinalStudent[] =
+        Array.isArray(data.students)
+          ? data.students.map(
+              (student: {
+                id: string;
+                name: string;
+                admissionNumber:
+                  | string
+                  | null;
+              }) => ({
+                id: student.id,
+                name: student.name,
+                admissionNumber:
+                  student.admissionNumber,
+              }),
+            )
+          : [];
+
+      const subjects =
+        Array.isArray(data.subjects)
+          ? data.subjects
+          : [];
+
+      const results =
+        Array.isArray(data.results)
+          ? data.results
+          : [];
+
+      /*
+       * Build:
+       *
+       * subjectId -> result[]
+       *
+       * This avoids repeatedly filtering the entire
+       * results array for every subject.
+       */
+      const resultsBySubject =
+        new Map<
+          string,
+          ResultRecord[]
+        >();
+
+      for (const result of results) {
+        if (
+          typeof result.subjectId !==
+            "string" ||
+          typeof result.studentId !==
+            "string" ||
+          result.marks === undefined ||
+          result.marks === null
+        ) {
+          continue;
+        }
+
+        const record: ResultRecord = {
+          id: String(result.id),
+          studentId:
+            result.studentId,
+          marks: Number(result.marks),
+        };
+
+        const subjectResults =
+          resultsBySubject.get(
+            result.subjectId,
+          );
+
+        if (subjectResults) {
+          subjectResults.push(record);
+        } else {
+          resultsBySubject.set(
+            result.subjectId,
+            [record],
+          );
+        }
+      }
+
+      const subjectResults: SubjectResult[] =
+        subjects.map(
+          (subject: {
+            subjectId: string;
+            subjectName: string;
+          }) => ({
+            subjectId:
+              subject.subjectId,
+            subjectName:
+              subject.subjectName,
+            results:
+              resultsBySubject.get(
+                subject.subjectId,
+              ) || [],
+          }),
+        );
+
+      setFinalStudents(students);
+      setFinalSubjectResults(
+        subjectResults,
+      );
+    } catch (err) {
+      if (
+        err instanceof DOMException &&
+        err.name === "AbortError"
+      ) {
+        return;
+      }
+
+      setFinalError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load final results",
+      );
+
+      setFinalSubjectResults([]);
+      setFinalStudents([]);
+    } finally {
+      if (!signal || !signal.aborted) {
+        setFinalLoading(false);
+      }
+    }
+  }
+
+  /*
+   * Final Results are loaded ONLY after the
+   * teacher selects an examination.
+   */
+  useEffect(() => {
+    if (!finalExaminationId) {
+      setFinalSubjectResults([]);
+      setFinalStudents([]);
+      setFinalError("");
+      return;
+    }
+
+    const controller =
+      new AbortController();
+
+    loadFinalResults(
+      finalExaminationId,
+      controller.signal,
+    );
+
+    return () => {
+      controller.abort();
+    };
+  }, [finalExaminationId]);
 
   async function saveMarks() {
-    if (!selectedAssignment || !examinationId) {
-      setError("Please select a subject and examination.");
+    if (
+      !selectedAssignment ||
+      !examinationId
+    ) {
+      setError(
+        "Please select a subject and examination.",
+      );
       return;
     }
 
@@ -294,7 +737,8 @@ export default function TeacherResultsPage() {
 
       const results = rows
         .map((row) => {
-          const value = marks[row.student.id]?.trim();
+          const value =
+            marks[row.student.id]?.trim();
 
           if (value === "") {
             return null;
@@ -320,95 +764,34 @@ export default function TeacherResultsPage() {
           result.marks < 0 ||
           result.marks > 100
         ) {
-          setError("Each entered mark must be a number from 0 to 100.");
+          setError(
+            "Each entered mark must be a number from 0 to 100.",
+          );
           return;
         }
       }
 
       if (results.length === 0) {
-        setError("Please enter at least one mark before saving.");
+        setError(
+          "Please enter at least one mark before saving.",
+        );
         return;
       }
 
-      const response = await fetch("/api/teacher-results", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          examinationId,
-          subjectId: selectedAssignment.subjectId,
-          results,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to save marks");
-      }
-
-      setMessage(
-        `Successfully saved ${data.saved || results.length} mark(s).`,
-      );
-
-      if (finalExaminationId === examinationId) {
-        await loadFinalResults(examinationId);
-      }
-
-      const refreshedResponse = await fetch(
-        `/api/teacher-results?examinationId=${encodeURIComponent(
-          examinationId,
-        )}&subjectId=${encodeURIComponent(selectedAssignment.subjectId)}`,
-        {
-          cache: "no-store",
-        },
-      );
-
-      const refreshedData = await refreshedResponse.json();
-
-      if (refreshedResponse.ok) {
-        const refreshedRows: SheetRow[] = refreshedData.students || [];
-
-        setRows(refreshedRows);
-
-        const refreshedMarks: Record<string, string> = {};
-
-        for (const row of refreshedRows) {
-          refreshedMarks[row.student.id] =
-            row.result?.marks !== undefined && row.result?.marks !== null
-              ? String(row.result.marks)
-              : "";
-        }
-
-        setMarks(refreshedMarks);
-      }
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to save marks",
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function loadFinalResults(examId: string) {
-    if (!examId) {
-      setFinalSubjectResults([]);
-      setFinalStudents([]);
-      return;
-    }
-
-    try {
-      setFinalLoading(true);
-      setFinalError("");
-
       const response = await fetch(
-        `/api/teacher-final-results?examinationId=${encodeURIComponent(
-          examId,
-        )}`,
+        "/api/teacher-results",
         {
-          cache: "no-store",
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            examinationId,
+            subjectId:
+              selectedAssignment.subjectId,
+            results,
+          }),
         },
       );
 
@@ -416,160 +799,247 @@ export default function TeacherResultsPage() {
 
       if (!response.ok) {
         throw new Error(
-          data.error || "Failed to load complete final results",
+          data.error ||
+            "Failed to save marks",
         );
       }
 
-      const students =
-        Array.isArray(data.students) ? data.students : [];
-
-      const subjects =
-        Array.isArray(data.subjects) ? data.subjects : [];
-
-      const results =
-        Array.isArray(data.results) ? data.results : [];
-
-      const subjectResults: SubjectResult[] = subjects.map(
-        (subject: {
-          subjectId: string;
-          subjectName: string;
-        }) => {
-          const subjectRecords: ResultRecord[] = results
-            .filter(
-              (result: {
-                studentId?: string;
-                subjectId?: string;
-                marks?: number;
-              }) =>
-                result.subjectId === subject.subjectId &&
-                result.marks !== undefined &&
-                result.marks !== null,
-            )
-            .map(
-              (result: {
-                id: string;
-                studentId: string;
-                marks: number;
-              }) => ({
-                id: result.id,
-                studentId: result.studentId,
-                marks: Number(result.marks),
-              }),
-            );
-
-          return {
-            subjectId: subject.subjectId,
-            subjectName: subject.subjectName,
-            results: subjectRecords,
-          };
-        },
+      setMessage(
+        `Successfully saved ${
+          data.saved || results.length
+        } mark(s).`,
       );
 
-      setFinalStudents(
-        students.map(
-          (student: {
-            id: string;
-            name: string;
-            admissionNumber: string | null;
-          }) => ({
-            id: student.id,
-            name: student.name,
-            admissionNumber: student.admissionNumber,
-          }),
-        ),
-      );
+      /*
+       * Refresh the marks sheet so the server
+       * remains the source of truth.
+       */
+      const refreshedResponse =
+        await fetch(
+          `/api/teacher-results?examinationId=${encodeURIComponent(
+            examinationId,
+          )}&subjectId=${encodeURIComponent(
+            selectedAssignment.subjectId,
+          )}`,
+          {
+            cache: "no-store",
+          },
+        );
 
-      setFinalSubjectResults(subjectResults);
+      const refreshedData =
+        await refreshedResponse.json();
+
+      if (!refreshedResponse.ok) {
+        throw new Error(
+          refreshedData.error ||
+            "Marks were saved, but the sheet could not be refreshed.",
+        );
+      }
+
+      const refreshedRows: SheetRow[] =
+        Array.isArray(
+          refreshedData.students,
+        )
+          ? refreshedData.students
+          : [];
+
+      setRows(refreshedRows);
+
+      const refreshedMarks: Record<
+        string,
+        string
+      > = {};
+
+      for (const row of refreshedRows) {
+        refreshedMarks[row.student.id] =
+          row.result?.marks !== undefined &&
+          row.result?.marks !== null
+            ? String(row.result.marks)
+            : "";
+      }
+
+      setMarks(refreshedMarks);
+
+      /*
+       * If the same examination is currently
+       * being viewed in Final Grade Results,
+       * refresh it as well.
+       *
+       * Otherwise, no final-results request
+       * is made.
+       */
+      if (
+        finalExaminationId ===
+        examinationId
+      ) {
+        await loadFinalResults(
+          examinationId,
+        );
+      }
     } catch (err) {
-      setFinalError(
+      setError(
         err instanceof Error
           ? err.message
-          : "Failed to load final results",
+          : "Failed to save marks",
       );
-      setFinalSubjectResults([]);
-      setFinalStudents([]);
     } finally {
-      setFinalLoading(false);
+      setSaving(false);
     }
   }
 
-  useEffect(() => {
-    if (finalExaminationId && examinations.length > 0) {
-      loadFinalResults(finalExaminationId);
-    }
-  }, [finalExaminationId, examinations]);
-
-  const finalRows = useMemo<StudentRow[]>(() => {
+  const finalRows = useMemo<
+    StudentRow[]
+  >(() => {
     if (finalStudents.length === 0) {
       return [];
     }
 
-    const calculated = finalStudents.map((student) => {
-      const marksBySubject: Record<string, number | null> = {};
-      let totalMarks = 0;
-      let totalPoints = 0;
+    /*
+     * Create:
+     *
+     * subjectId -> studentId -> marks
+     *
+     * This gives O(1) mark lookup when building
+     * the final grade sheet.
+     */
+    const marksLookup = new Map<
+      string,
+      Map<string, number>
+    >();
 
-      for (const subject of finalSubjectResults) {
-        const result = subject.results.find(
-          (item) => item.studentId === student.id,
-        );
+    for (const subject of finalSubjectResults) {
+      const studentMarks =
+        new Map<string, number>();
 
-        const mark =
-          result && Number.isFinite(result.marks)
-            ? result.marks
-            : null;
+      for (const result of subject.results) {
+        if (
+          Number.isFinite(result.marks)
+        ) {
+          studentMarks.set(
+            result.studentId,
+            result.marks,
+          );
+        }
+      }
 
-        marksBySubject[subject.subjectId] = mark;
+      marksLookup.set(
+        subject.subjectId,
+        studentMarks,
+      );
+    }
 
-        if (mark !== null) {
-          totalMarks += mark;
+    const calculated =
+      finalStudents.map((student) => {
+        const marksBySubject: Record<
+          string,
+          number | null
+        > = {};
+
+        let totalMarks = 0;
+        let totalPoints = 0;
+
+        for (const subject of finalSubjectResults) {
+          const subjectMarks =
+            marksLookup.get(
+              subject.subjectId,
+            );
+
+          const mark =
+            subjectMarks?.get(
+              student.id,
+            ) ?? null;
+
+          marksBySubject[
+            subject.subjectId
+          ] = mark;
+
+          if (mark !== null) {
+            totalMarks += mark;
+          }
+
+          /*
+           * IMPORTANT:
+           * 0 marks is a real mark and correctly
+           * receives BE = 2 points.
+           */
+          totalPoints +=
+            getExpectation(mark)
+              .points;
         }
 
-        totalPoints += getExpectation(mark).points;
-      }
-
-      return {
-        studentId: student.id,
-        admissionNumber: student.admissionNumber || "—",
-        name: student.name,
-        marksBySubject,
-        totalMarks,
-        totalPoints,
-        position: 0,
-      };
-    });
+        return {
+          studentId: student.id,
+          admissionNumber:
+            student.admissionNumber ||
+            "—",
+          name: student.name,
+          marksBySubject,
+          totalMarks,
+          totalPoints,
+          position: 0,
+        };
+      });
 
     calculated.sort((a, b) => {
-      if (b.totalMarks !== a.totalMarks) {
-        return b.totalMarks - a.totalMarks;
+      if (
+        b.totalMarks !==
+        a.totalMarks
+      ) {
+        return (
+          b.totalMarks -
+          a.totalMarks
+        );
       }
 
-      return a.name.localeCompare(b.name);
+      return a.name.localeCompare(
+        b.name,
+      );
     });
 
-    // Competition ranking: 1, 2, 2, 4
-    let previousMarks: number | null = null;
+    /*
+     * Competition ranking:
+     *
+     * 1, 2, 2, 4
+     */
+    let previousMarks:
+      | number
+      | null = null;
+
     let previousPosition = 0;
 
-    calculated.forEach((row, index) => {
-      const position = index + 1;
+    calculated.forEach(
+      (row, index) => {
+        const position = index + 1;
 
-      if (previousMarks === row.totalMarks) {
-        row.position = previousPosition;
-      } else {
-        row.position = position;
-        previousPosition = position;
-        previousMarks = row.totalMarks;
-      }
-    });
+        if (
+          previousMarks ===
+          row.totalMarks
+        ) {
+          row.position =
+            previousPosition;
+        } else {
+          row.position = position;
+          previousPosition =
+            position;
+          previousMarks =
+            row.totalMarks;
+        }
+      },
+    );
 
     return calculated;
-  }, [finalStudents, finalSubjectResults]);
+  }, [
+    finalStudents,
+    finalSubjectResults,
+  ]);
 
   async function signOut() {
-    await fetch("/api/auth/logout", {
-      method: "POST",
-    });
+    await fetch(
+      "/api/auth/logout",
+      {
+        method: "POST",
+      },
+    );
 
     window.location.href = "/";
   }
@@ -653,18 +1123,39 @@ export default function TeacherResultsPage() {
                   id="assignment"
                   value={assignmentId}
                   onChange={(event) =>
-                    setAssignmentId(event.target.value)
+                    handleAssignmentChange(
+                      event.target.value,
+                    )
                   }
                   className="w-full rounded-lg border border-slate-400 bg-white px-4 py-3 text-sm font-medium text-slate-950 outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
                 >
-                  <option value="">Select subject</option>
+                  <option value="">
+                    Select subject
+                  </option>
 
-                  {assignments.map((assignment) => (
-                    <option key={assignment.id} value={assignment.id}>
-                      {assignment.grade.name} —{" "}
-                      {assignment.subject.name}
-                    </option>
-                  ))}
+                  {assignments.map(
+                    (assignment) => (
+                      <option
+                        key={
+                          assignment.id
+                        }
+                        value={
+                          assignment.id
+                        }
+                      >
+                        {
+                          assignment.grade
+                            .name
+                        }{" "}
+                        —{" "}
+                        {
+                          assignment
+                            .subject
+                            .name
+                        }
+                      </option>
+                    ),
+                  )}
                 </select>
               </div>
 
@@ -680,37 +1171,70 @@ export default function TeacherResultsPage() {
                   id="examination"
                   value={examinationId}
                   onChange={(event) =>
-                    setExaminationId(event.target.value)
+                    setExaminationId(
+                      event.target.value,
+                    )
                   }
                   className="w-full rounded-lg border border-slate-400 bg-white px-4 py-3 text-sm font-medium text-slate-950 outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
                 >
-                  <option value="">Select examination</option>
+                  <option value="">
+                    Select examination
+                  </option>
 
-                  {filteredExaminations.map((examination) => (
-                    <option
-                      key={examination.id}
-                      value={examination.id}
-                    >
-                      {examination.term.academicYear.year} —{" "}
-                      {examination.term.name} —{" "}
-                      {examination.name}
-                    </option>
-                  ))}
+                  {filteredExaminations.map(
+                    (examination) => (
+                      <option
+                        key={
+                          examination.id
+                        }
+                        value={
+                          examination.id
+                        }
+                      >
+                        {
+                          examination
+                            .term
+                            .academicYear
+                            .year
+                        }{" "}
+                        —{" "}
+                        {
+                          examination
+                            .term
+                            .name
+                        }{" "}
+                        —{" "}
+                        {
+                          examination.name
+                        }
+                      </option>
+                    ),
+                  )}
                 </select>
               </div>
             </div>
 
-            {selectedAssignment && selectedExamination && (
-              <div className="mt-5 rounded-lg border border-slate-200 bg-slate-100 px-4 py-3 text-sm font-medium text-slate-800">
-                <strong className="font-bold">
-                  {selectedAssignment.subject.name}
-                </strong>
-                {" · "}
-                {selectedAssignment.grade.name}
-                {" · "}
-                {selectedExamination.name}
-              </div>
-            )}
+            {selectedAssignment &&
+              selectedExamination && (
+                <div className="mt-5 rounded-lg border border-slate-200 bg-slate-100 px-4 py-3 text-sm font-medium text-slate-800">
+                  <strong className="font-bold">
+                    {
+                      selectedAssignment
+                        .subject
+                        .name
+                    }
+                  </strong>
+                  {" · "}
+                  {
+                    selectedAssignment
+                      .grade.name
+                  }
+                  {" · "}
+                  {
+                    selectedExamination.name
+                  }
+                </div>
+              )}
           </section>
 
           <section className="mt-6 rounded-2xl border border-slate-300 bg-white shadow-sm">
@@ -758,42 +1282,68 @@ export default function TeacherResultsPage() {
                     </thead>
 
                     <tbody>
-                      {rows.map((row, index) => (
-                        <tr
-                          key={row.student.id}
-                          className="hover:bg-slate-50"
-                        >
-                          <td className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-                            {index + 1}
-                          </td>
+                      {rows.map(
+                        (row, index) => (
+                          <tr
+                            key={
+                              row.student.id
+                            }
+                            className="hover:bg-slate-50"
+                          >
+                            <td className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+                              {index + 1}
+                            </td>
 
-                          <td className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-                            {row.student.admissionNumber || "—"}
-                          </td>
-
-                          <td className="border-b border-slate-200 px-4 py-3 text-sm font-bold text-slate-950">
-                            {row.student.name}
-                          </td>
-
-                          <td className="border-b border-slate-200 px-4 py-3">
-                            <input
-                              type="number"
-                              min="0"
-                              max="100"
-                              step="0.01"
-                              value={marks[row.student.id] || ""}
-                              onChange={(event) =>
-                                setMarks((current) => ({
-                                  ...current,
-                                  [row.student.id]:
-                                    event.target.value,
-                                }))
+                            <td className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+                              {
+                                row.student
+                                  .admissionNumber
                               }
-                              className="w-32 rounded-lg border border-slate-400 bg-white px-3 py-2 text-sm font-bold text-slate-950 outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
-                            />
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+
+                            <td className="border-b border-slate-200 px-4 py-3 text-sm font-bold text-slate-950">
+                              {
+                                row.student
+                                  .name
+                              }
+                            </td>
+
+                            <td className="border-b border-slate-200 px-4 py-3">
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="0.01"
+                                value={
+                                  marks[
+                                    row
+                                      .student
+                                      .id
+                                  ] ?? ""
+                                }
+                                onChange={(
+                                  event,
+                                ) =>
+                                  setMarks(
+                                    (
+                                      current,
+                                    ) => ({
+                                      ...current,
+                                      [row
+                                        .student
+                                        .id]:
+                                        event
+                                          .target
+                                          .value,
+                                    }),
+                                  )
+                                }
+                                className="w-32 rounded-lg border border-slate-400 bg-white px-3 py-2 text-sm font-bold text-slate-950 outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
+                              />
+                            </td>
+                          </tr>
+                        ),
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -805,7 +1355,9 @@ export default function TeacherResultsPage() {
                     disabled={saving}
                     className="rounded-lg bg-emerald-600 px-6 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {saving ? "Saving..." : "Save Marks"}
+                    {saving
+                      ? "Saving..."
+                      : "Save Marks"}
                   </button>
                 </div>
               </>
@@ -820,9 +1372,9 @@ export default function TeacherResultsPage() {
             </h2>
 
             <p className="mt-2 text-slate-700">
-              View the complete examination results for a grade,
-              including subject marks, expectations, total marks,
-              total points and position.
+              View the complete examination results for any grade in
+              your school, including subject marks, expectations,
+              total marks, total points and position.
             </p>
           </div>
 
@@ -845,39 +1397,78 @@ export default function TeacherResultsPage() {
                 id="final-examination"
                 value={finalExaminationId}
                 onChange={(event) =>
-                  setFinalExaminationId(event.target.value)
+                  setFinalExaminationId(
+                    event.target.value,
+                  )
                 }
                 className="w-full max-w-xl rounded-lg border border-slate-400 bg-white px-4 py-3 text-sm font-semibold text-slate-950 outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
               >
-                <option value="">Select examination</option>
+                <option value="">
+                  Select examination
+                </option>
 
-                {examinations.map((examination) => (
-                  <option
-                    key={examination.id}
-                    value={examination.id}
-                  >
-                    {examination.term.academicYear.year} —{" "}
-                    {examination.term.name} —{" "}
-                    {examination.grade.name} —{" "}
-                    {examination.name}
-                  </option>
-                ))}
+                {finalExaminations.map(
+                  (examination) => (
+                    <option
+                      key={
+                        examination.id
+                      }
+                      value={
+                        examination.id
+                      }
+                    >
+                      {
+                        examination.term
+                          .academicYear
+                          .year
+                      }{" "}
+                      —{" "}
+                      {
+                        examination.term
+                          .name
+                      }{" "}
+                      —{" "}
+                      {
+                        examination.grade
+                          .name
+                      }{" "}
+                      —{" "}
+                      {
+                        examination.name
+                      }
+                    </option>
+                  ),
+                )}
               </select>
 
               {selectedFinalExamination && (
                 <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900">
                   <strong>
-                    {selectedFinalExamination.grade.name}
+                    {
+                      selectedFinalExamination
+                        .grade.name
+                    }
                   </strong>
                   {" · "}
-                  {selectedFinalExamination.term.name}
+                  {
+                    selectedFinalExamination
+                      .term.name
+                  }
                   {" · "}
-                  {selectedFinalExamination.name}
+                  {
+                    selectedFinalExamination
+                      .name
+                  }
                 </div>
               )}
             </div>
 
-            {finalLoading ? (
+            {!finalExaminationId ? (
+              <div className="px-6 py-10 text-center font-medium text-slate-700">
+                Select an examination above to view its complete grade
+                results.
+              </div>
+            ) : finalLoading ? (
               <div className="px-6 py-10 text-center font-medium text-slate-700">
                 Loading final grade results...
               </div>
@@ -903,23 +1494,35 @@ export default function TeacherResultsPage() {
                         Learner Name
                       </th>
 
-                      {finalSubjectResults.map((subject) => (
-                        <React.Fragment key={subject.subjectId}>
-                          <th className="border border-slate-600 px-3 py-3 text-center">
-                            {subject.subjectName}
-                            <div className="mt-1 text-xs font-medium text-white">
-                              Mark
-                            </div>
-                          </th>
+                      {finalSubjectResults.map(
+                        (subject) => (
+                          <React.Fragment
+                            key={
+                              subject.subjectId
+                            }
+                          >
+                            <th className="border border-slate-600 px-3 py-3 text-center">
+                              {
+                                subject.subjectName
+                              }
 
-                          <th className="border border-slate-600 px-3 py-3 text-center">
-                            {subject.subjectName}
-                            <div className="mt-1 text-xs font-medium text-white">
-                              Expectation
-                            </div>
-                          </th>
-                        </React.Fragment>
-                      ))}
+                              <div className="mt-1 text-xs font-medium text-white">
+                                Mark
+                              </div>
+                            </th>
+
+                            <th className="border border-slate-600 px-3 py-3 text-center">
+                              {
+                                subject.subjectName
+                              }
+
+                              <div className="mt-1 text-xs font-medium text-white">
+                                Expectation
+                              </div>
+                            </th>
+                          </React.Fragment>
+                        ),
+                      )}
 
                       <th className="border border-slate-600 px-3 py-3">
                         Total Marks
@@ -936,60 +1539,88 @@ export default function TeacherResultsPage() {
                   </thead>
 
                   <tbody>
-                    {finalRows.map((student, index) => (
-                      <tr
-                        key={student.studentId}
-                        className="bg-white hover:bg-slate-50"
-                      >
-                        <td className="border border-slate-300 px-3 py-3 text-sm font-bold text-slate-950">
-                          {index + 1}
-                        </td>
+                    {finalRows.map(
+                      (student, index) => (
+                        <tr
+                          key={
+                            student.studentId
+                          }
+                          className="bg-white hover:bg-slate-50"
+                        >
+                          <td className="border border-slate-300 px-3 py-3 text-sm font-bold text-slate-950">
+                            {index + 1}
+                          </td>
 
-                        <td className="border border-slate-300 px-3 py-3 text-sm font-bold text-slate-950">
-                          {student.admissionNumber}
-                        </td>
+                          <td className="border border-slate-300 px-3 py-3 text-sm font-bold text-slate-950">
+                            {
+                              student.admissionNumber
+                            }
+                          </td>
 
-                        <td className="border border-slate-300 px-3 py-3 text-sm font-bold text-slate-950">
-                          {student.name}
-                        </td>
+                          <td className="border border-slate-300 px-3 py-3 text-sm font-bold text-slate-950">
+                            {
+                              student.name
+                            }
+                          </td>
 
-                        {finalSubjectResults.map((subject) => {
-                          const mark =
-                            student.marksBySubject[
-                              subject.subjectId
-                            ] ?? null;
+                          {finalSubjectResults.map(
+                            (subject) => {
+                              const mark =
+                                student
+                                  .marksBySubject[
+                                  subject
+                                    .subjectId
+                                ] ??
+                                null;
 
-                          const expectation =
-                            getExpectation(mark);
+                              const expectation =
+                                getExpectation(
+                                  mark,
+                                );
 
-                          return (
-                            <React.Fragment
-                              key={subject.subjectId}
-                            >
-                              <td className="border border-slate-300 px-3 py-3 text-center text-sm font-bold text-slate-950">
-                                {mark === null ? "—" : mark}
-                              </td>
+                              return (
+                                <React.Fragment
+                                  key={
+                                    subject.subjectId
+                                  }
+                                >
+                                  <td className="border border-slate-300 px-3 py-3 text-center text-sm font-bold text-slate-950">
+                                    {mark ===
+                                    null
+                                      ? "—"
+                                      : mark}
+                                  </td>
 
-                              <td className="border border-slate-300 px-3 py-3 text-center text-sm font-extrabold text-slate-950">
-                                {expectation.code}
-                              </td>
-                            </React.Fragment>
-                          );
-                        })}
+                                  <td className="border border-slate-300 px-3 py-3 text-center text-sm font-extrabold text-slate-950">
+                                    {
+                                      expectation.code
+                                    }
+                                  </td>
+                                </React.Fragment>
+                              );
+                            },
+                          )}
 
-                        <td className="border border-slate-300 px-3 py-3 text-center text-sm font-extrabold text-slate-950">
-                          {student.totalMarks}
-                        </td>
+                          <td className="border border-slate-300 px-3 py-3 text-center text-sm font-extrabold text-slate-950">
+                            {
+                              student.totalMarks
+                            }
+                          </td>
 
-                        <td className="border border-slate-300 px-3 py-3 text-center text-sm font-extrabold text-slate-950">
-                          {student.totalPoints}
-                        </td>
+                          <td className="border border-slate-300 px-3 py-3 text-center text-sm font-extrabold text-slate-950">
+                            {
+                              student.totalPoints
+                            }
+                          </td>
 
-                        <td className="border border-slate-300 px-3 py-3 text-center text-sm font-extrabold text-slate-950">
-                          {student.position}
-                        </td>
-                      </tr>
-                    ))}
+                          <td className="border border-slate-300 px-3 py-3 text-center text-sm font-extrabold text-slate-950">
+                            {
+                              student.position
+                            }
+                          </td>
+                        </tr>
+                      ),
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -997,9 +1628,11 @@ export default function TeacherResultsPage() {
           </section>
 
           <div className="mt-4 rounded-lg border border-slate-300 bg-white px-5 py-4 text-sm font-medium text-slate-800">
-            <strong className="font-bold">Expectation scale:</strong>{" "}
-            EE = 75–100 (8 points), ME = 51–74 (6 points), AE =
-            25–50 (4 points), BE = 1–24 (2 points).
+            <strong className="font-bold">
+              Expectation scale:
+            </strong>{" "}
+            EE = 75–100 (8 points), ME = 51–74 (6 points),
+            AE = 25–50 (4 points), BE = 0–24 (2 points).
           </div>
         </section>
       </div>

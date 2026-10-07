@@ -24,31 +24,109 @@ export async function GET(request: Request) {
     }
 
     const { searchParams } = new URL(request.url);
-    const examinationId = searchParams.get("examinationId");
+    const examinationId =
+      searchParams.get("examinationId");
 
+    /*
+     * ---------------------------------------------------------
+     * MODE 1: SCHOOL-WIDE EXAMINATION LIST
+     * ---------------------------------------------------------
+     *
+     * This mode is used by the Final Grade Results dropdown.
+     *
+     * IMPORTANT:
+     * Teachers are allowed to VIEW final results for every
+     * grade in their own school.
+     *
+     * This does NOT give them permission to enter marks.
+     * Mark entry remains protected by /api/teacher-results.
+     */
     if (!examinationId) {
-      return NextResponse.json(
-        { error: "Examination ID is required" },
-        { status: 400 },
-      );
+      const examinations =
+        await prisma.examination.findMany({
+          where: {
+            grade: {
+              schoolId: teacher.schoolId,
+            },
+          },
+          select: {
+            id: true,
+            name: true,
+            gradeId: true,
+            grade: {
+              select: {
+                id: true,
+                name: true,
+                level: true,
+              },
+            },
+            term: {
+              select: {
+                id: true,
+                name: true,
+                academicYear: {
+                  select: {
+                    id: true,
+                    year: true,
+                  },
+                },
+              },
+            },
+          },
+          orderBy: [
+            {
+              createdAt: "desc",
+            },
+          ],
+        });
+
+      return NextResponse.json({
+        examinations,
+      });
     }
 
-    const examination = await prisma.examination.findFirst({
-      where: {
-        id: examinationId,
-        grade: {
-          schoolId: teacher.schoolId,
-        },
-      },
-      include: {
-        grade: true,
-        term: {
-          include: {
-            academicYear: true,
+    /*
+     * ---------------------------------------------------------
+     * MODE 2: COMPLETE FINAL RESULTS
+     * ---------------------------------------------------------
+     *
+     * The selected examination must belong to the teacher's
+     * authenticated school.
+     */
+    const examination =
+      await prisma.examination.findFirst({
+        where: {
+          id: examinationId,
+          grade: {
+            schoolId: teacher.schoolId,
           },
         },
-      },
-    });
+        select: {
+          id: true,
+          name: true,
+          gradeId: true,
+          grade: {
+            select: {
+              id: true,
+              name: true,
+              level: true,
+              schoolId: true,
+            },
+          },
+          term: {
+            select: {
+              id: true,
+              name: true,
+              academicYear: {
+                select: {
+                  id: true,
+                  year: true,
+                },
+              },
+            },
+          },
+        },
+      });
 
     if (!examination) {
       return NextResponse.json(
@@ -60,87 +138,99 @@ export async function GET(request: Request) {
       );
     }
 
-    const gradeAssignment = teacher.assignments.find(
-      (assignment) =>
-        assignment.gradeId === examination.gradeId &&
-        assignment.grade.schoolId === teacher.schoolId,
-    );
-
-    if (!gradeAssignment) {
-      return NextResponse.json(
-        {
-          error:
-            "You are not assigned to this grade and cannot view its complete results.",
+    /*
+     * These queries are independent after the examination
+     * has been verified, so run them concurrently.
+     */
+    const [
+      gradeSubjects,
+      students,
+      results,
+    ] = await Promise.all([
+      prisma.gradeSubject.findMany({
+        where: {
+          gradeId: examination.gradeId,
+          grade: {
+            schoolId: teacher.schoolId,
+          },
         },
-        { status: 403 },
-      );
-    }
-
-    const gradeSubjects = await prisma.gradeSubject.findMany({
-      where: {
-        gradeId: examination.gradeId,
-        grade: {
-          schoolId: teacher.schoolId,
+        select: {
+          subjectId: true,
+          subject: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
         },
-      },
-      include: {
-        subject: true,
-      },
-      orderBy: {
-        subject: {
-          name: "asc",
+        orderBy: {
+          subject: {
+            name: "asc",
+          },
         },
-      },
-    });
+      }),
 
-    const students = await prisma.student.findMany({
-      where: {
-        gradeId: examination.gradeId,
-        schoolId: teacher.schoolId,
-        grade: {
-          schoolId: teacher.schoolId,
-        },
-      },
-      orderBy: {
-        name: "asc",
-      },
-    });
-
-    const results = await prisma.result.findMany({
-      where: {
-        examinationId,
-        student: {
+      prisma.student.findMany({
+        where: {
           gradeId: examination.gradeId,
           schoolId: teacher.schoolId,
-          grade: {
+        },
+        select: {
+          id: true,
+          name: true,
+          admissionNumber: true,
+        },
+        orderBy: {
+          name: "asc",
+        },
+      }),
+
+      prisma.result.findMany({
+        where: {
+          examinationId,
+          student: {
+            gradeId: examination.gradeId,
             schoolId: teacher.schoolId,
           },
-        },
-        examination: {
-          grade: {
-            schoolId: teacher.schoolId,
+          examination: {
+            grade: {
+              schoolId: teacher.schoolId,
+            },
           },
         },
-      },
-      include: {
-        subject: true,
-      },
-    });
+        select: {
+          id: true,
+          studentId: true,
+          subjectId: true,
+          marks: true,
+        },
+      }),
+    ]);
 
     return NextResponse.json({
       examination,
-      subjects: gradeSubjects.map((gradeSubject) => ({
-        subjectId: gradeSubject.subjectId,
-        subjectName: gradeSubject.subject.name,
-      })),
+      subjects: gradeSubjects.map(
+        (gradeSubject) => ({
+          subjectId:
+            gradeSubject.subjectId,
+          subjectName:
+            gradeSubject.subject.name,
+        }),
+      ),
       students,
       results,
     });
   } catch (error) {
-    console.error("Teacher final results error:", error);
+    console.error(
+      "Teacher final results error:",
+      error,
+    );
 
     return NextResponse.json(
-      { error: "Failed to load complete final results" },
+      {
+        error:
+          "Failed to load teacher final results",
+      },
       { status: 500 },
     );
   }

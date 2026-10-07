@@ -10,26 +10,75 @@ export async function getCurrentTeacher() {
 
   const session = await prisma.teacherSession.findUnique({
     where: { token },
-    include: {
+    select: {
+      id: true,
+      expiresAt: true,
+
       teacher: {
-        include: {
-          school: true,
-          assignments: {
-            include: {
-              grade: true,
-              subject: true,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          schoolId: true,
+
+          school: {
+            select: {
+              id: true,
+              name: true,
+              isActive: true,
+              activationExpiryDate: true,
             },
+          },
+
+          assignments: {
+            select: {
+              id: true,
+              gradeId: true,
+              subjectId: true,
+
+              grade: {
+                select: {
+                  id: true,
+                  name: true,
+                  level: true,
+                  schoolId: true,
+                },
+              },
+
+              subject: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+            },
+
             orderBy: [
               { grade: { level: "asc" } },
               { subject: { name: "asc" } },
             ],
           },
+
           classTeacherAssignments: {
-            include: {
-              grade: true,
+            select: {
+              id: true,
+              gradeId: true,
+
+              grade: {
+                select: {
+                  id: true,
+                  name: true,
+                  level: true,
+                  schoolId: true,
+                },
+              },
             },
+
             orderBy: {
-              grade: { level: "asc" },
+              grade: {
+                level: "asc",
+              },
             },
           },
         },

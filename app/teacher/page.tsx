@@ -3,37 +3,181 @@
 import { useEffect, useMemo, useState } from "react";
 
 type TeacherAssignment = {
+  id: string;
   gradeId: string;
+  subjectId: string;
+  grade: {
+    id: string;
+    name: string;
+    level: number;
+    schoolId: string;
+  };
+  subject: {
+    id: string;
+    name: string;
+  };
+};
+
+type ClassTeacherAssignment = {
+  id: string;
+  gradeId: string;
+  grade: {
+    id: string;
+    name: string;
+    level: number;
+    schoolId: string;
+  };
 };
 
 type TeacherProfile = {
+  id: string;
   name: string;
+  email: string;
+  phone: string | null;
   assignments: TeacherAssignment[];
+  classTeacherAssignments: ClassTeacherAssignment[];
 };
 
 export default function TeacherDashboard() {
   const [teacher, setTeacher] =
     useState<TeacherProfile | null>(null);
 
+  const [loading, setLoading] = useState(true);
+
+  const [error, setError] = useState("");
+
   useEffect(() => {
-    void fetch("/api/auth/me")
-      .then(async (response) =>
-        response.ok ? response.json() : null
-      )
-      .then((data) =>
-        setTeacher(data?.teacher ?? null)
-      );
+    let cancelled = false;
+
+    async function loadTeacher() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await fetch("/api/auth/me", {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          if (!cancelled) {
+            setTeacher(null);
+            setError(
+              data?.error ||
+                "Your teacher session could not be verified."
+            );
+          }
+
+          return;
+        }
+
+        if (!data?.teacher) {
+          if (!cancelled) {
+            setTeacher(null);
+            setError(
+              "You are not currently signed in as a teacher."
+            );
+          }
+
+          return;
+        }
+
+        if (!cancelled) {
+          setTeacher(data.teacher);
+        }
+      } catch (err) {
+        console.error(
+          "Error loading teacher information:",
+          err
+        );
+
+        if (!cancelled) {
+          setTeacher(null);
+          setError(
+            "Unable to load your teacher information. Please refresh the page."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadTeacher();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const classCount = useMemo(
-    () =>
-      new Set(
-        teacher?.assignments.map(
-          (assignment) => assignment.gradeId
-        ) ?? []
-      ).size,
-    [teacher]
-  );
+  const uniqueSubjects = useMemo(() => {
+    if (!teacher) {
+      return [];
+    }
+
+    const subjects = new Map<
+      string,
+      string
+    >();
+
+    for (const assignment of teacher.assignments) {
+      subjects.set(
+        assignment.subject.id,
+        assignment.subject.name
+      );
+    }
+
+    return Array.from(subjects.values()).sort();
+  }, [teacher]);
+
+  const uniqueClasses = useMemo(() => {
+    if (!teacher) {
+      return [];
+    }
+
+    const classes = new Map<
+      string,
+      string
+    >();
+
+    for (const assignment of teacher.assignments) {
+      classes.set(
+        assignment.grade.id,
+        assignment.grade.name
+      );
+    }
+
+    for (const assignment of teacher.classTeacherAssignments) {
+      classes.set(
+        assignment.grade.id,
+        assignment.grade.name
+      );
+    }
+
+    return Array.from(classes.values()).sort(
+      (a, b) => {
+        const levelA =
+          Number(
+            a.replace(/\D/g, "")
+          ) || 0;
+
+        const levelB =
+          Number(
+            b.replace(/\D/g, "")
+          ) || 0;
+
+        return levelA - levelB;
+      }
+    );
+  }, [teacher]);
+
+  const subjectCount = uniqueSubjects.length;
+
+  const classCount = uniqueClasses.length;
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
@@ -65,7 +209,10 @@ export default function TeacherDashboard() {
           </p>
 
           <h2 className="mt-2 text-4xl font-bold">
-            Welcome, {teacher?.name || "Teacher"}
+            Welcome,{" "}
+            {loading
+              ? "Teacher"
+              : teacher?.name || "Teacher"}
           </h2>
 
           <p className="mt-3 max-w-2xl text-blue-100">
@@ -76,6 +223,34 @@ export default function TeacherDashboard() {
       </section>
 
       <section className="mx-auto max-w-7xl px-6 py-12">
+        {loading && (
+          <div className="mb-8 rounded-2xl border border-blue-200 bg-blue-50 p-5 text-blue-800">
+            Loading your teacher information...
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="mb-8 rounded-2xl border border-red-200 bg-red-50 p-5 text-red-800">
+            <p className="font-semibold">
+              Unable to load teacher information
+            </p>
+
+            <p className="mt-1 text-sm">
+              {error}
+            </p>
+
+            <button
+              type="button"
+              onClick={() =>
+                window.location.reload()
+              }
+              className="mt-4 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+            >
+              Refresh Page
+            </button>
+          </div>
+        )}
+
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <div className="text-3xl">📚</div>
@@ -250,7 +425,9 @@ export default function TeacherDashboard() {
               </p>
 
               <p className="mt-1 font-semibold">
-                {teacher?.name || "Not signed in"}
+                {loading
+                  ? "Loading..."
+                  : teacher?.name || "Not signed in"}
               </p>
             </div>
 
@@ -260,9 +437,11 @@ export default function TeacherDashboard() {
               </p>
 
               <p className="mt-1 font-semibold">
-                {teacher
-                  ? teacher.assignments.length
-                  : "Not assigned"}
+                {loading
+                  ? "Loading..."
+                  : teacher
+                    ? subjectCount
+                    : "Not assigned"}
               </p>
             </div>
 
@@ -272,10 +451,56 @@ export default function TeacherDashboard() {
               </p>
 
               <p className="mt-1 font-semibold">
-                {teacher ? classCount : "Not assigned"}
+                {loading
+                  ? "Loading..."
+                  : teacher
+                    ? classCount
+                    : "Not assigned"}
               </p>
             </div>
           </div>
+
+          {teacher && (
+            <div className="mt-8 grid gap-6 md:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 p-5">
+                <h4 className="font-bold">
+                  Assigned Subjects
+                </h4>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {uniqueSubjects.map(
+                    (subject) => (
+                      <span
+                        key={subject}
+                        className="rounded-full bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700"
+                      >
+                        {subject}
+                      </span>
+                    )
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 p-5">
+                <h4 className="font-bold">
+                  Assigned Classes
+                </h4>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {uniqueClasses.map(
+                    (grade) => (
+                      <span
+                        key={grade}
+                        className="rounded-full bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700"
+                      >
+                        {grade}
+                      </span>
+                    )
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 

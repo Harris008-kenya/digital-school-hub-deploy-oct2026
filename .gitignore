@@ -62,3 +62,15 @@ student-cookies.txt
 my-quizzes-page.txt
 check-results.cjs
 check-schools.cjs
+# migration/export temporary files
+sqlite-data-export.json
+inspect-db.js
+migrate-sqlite-to-supabase.js
+# local backup copies
+*.backup.ts
+*.backup.tsx
+prisma/prisma.config.ts
+prisma/schema.after-db-pull.backup.prisma
+prisma/schema.before-parent-push.backup.prisma
+prisma/schema.before-parent-push.prisma
+prisma/schema.backup.prisma

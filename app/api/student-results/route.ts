@@ -83,73 +83,115 @@ export async function GET() {
     }
 
     /*
-     * Find all examinations belonging to the student's
-     * grade and school.
+     * These two queries are independent, so run them in parallel.
+     *
+     * Only the fields required by the response and ranking logic
+     * are selected.
      */
-    const examinations = await prisma.examination.findMany({
-      where: {
-        gradeId: student.gradeId,
-        grade: {
-          schoolId: student.schoolId,
-        },
-      },
-      include: {
-        term: {
-          include: {
-            academicYear: true,
-          },
-        },
-        grade: true,
-      },
-      orderBy: [
-        {
-          term: {
-            academicYear: {
-              year: "desc",
-            },
-          },
-        },
-        {
-          createdAt: "desc",
-        },
-      ],
-    });
-
-    /*
-     * Get the logged-in student's individual subject results.
-     */
-    const results = await prisma.result.findMany({
-      where: {
-        studentId: student.id,
-        examination: {
+    const [examinations, results] = await Promise.all([
+      prisma.examination.findMany({
+        where: {
           gradeId: student.gradeId,
           grade: {
             schoolId: student.schoolId,
           },
         },
-      },
-      include: {
-        subject: true,
-        examination: {
-          include: {
-            term: {
-              include: {
-                academicYear: true,
+        select: {
+          id: true,
+          name: true,
+          createdAt: true,
+          term: {
+            select: {
+              id: true,
+              name: true,
+              academicYear: {
+                select: {
+                  id: true,
+                  year: true,
+                },
               },
             },
-            grade: true,
+          },
+          grade: {
+            select: {
+              id: true,
+              name: true,
+            },
           },
         },
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
-    });
+        orderBy: [
+          {
+            term: {
+              academicYear: {
+                year: "desc",
+              },
+            },
+          },
+          {
+            createdAt: "desc",
+          },
+        ],
+      }),
+
+      prisma.result.findMany({
+        where: {
+          studentId: student.id,
+          examination: {
+            gradeId: student.gradeId,
+            grade: {
+              schoolId: student.schoolId,
+            },
+          },
+        },
+        select: {
+          examinationId: true,
+          marks: true,
+          subject: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+          examination: {
+            select: {
+              id: true,
+              name: true,
+              term: {
+                select: {
+                  id: true,
+                  name: true,
+                  academicYear: {
+                    select: {
+                      id: true,
+                      year: true,
+                    },
+                  },
+                },
+              },
+              grade: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+        orderBy: {
+          createdAt: "asc",
+        },
+      }),
+    ]);
 
     /*
-     * Get all students' results for the relevant examinations.
-     * This is used to calculate positions within the student's
-     * grade using total marks.
+     * Get all results for the relevant examinations so that
+     * competition positions can be calculated within the
+     * student's grade.
+     *
+     * This query is still necessary because ranking requires
+     * the totals of all students in each examination.
+     *
+     * Only the three fields needed for ranking are selected.
      */
     const examinationIds = examinations.map(
       (examination) => examination.id,
@@ -184,33 +226,42 @@ export async function GET() {
     >();
 
     for (const result of allExaminationResults) {
-      if (!totalsByExamination.has(result.examinationId)) {
+      let studentTotals =
+        totalsByExamination.get(
+          result.examinationId,
+        );
+
+      if (!studentTotals) {
+        studentTotals = new Map<string, number>();
+
         totalsByExamination.set(
           result.examinationId,
-          new Map<string, number>(),
+          studentTotals,
         );
       }
 
-      const studentTotals =
-        totalsByExamination.get(result.examinationId)!;
+      const marks = Number(result.marks);
 
       studentTotals.set(
         result.studentId,
-        (studentTotals.get(result.studentId) || 0) +
-          result.marks,
+        (studentTotals.get(result.studentId) ?? 0) +
+          marks,
       );
     }
 
     /*
-     * Store the logged-in student's total and position
-     * for every examination.
+     * Store the logged-in student's total and competition
+     * position for every examination.
      */
     const positionByExamination = new Map<
       string,
       number | null
     >();
 
-    const totalByExamination = new Map<string, number>();
+    const totalByExamination = new Map<
+      string,
+      number
+    >();
 
     for (const examination of examinations) {
       const studentTotals =
@@ -220,12 +271,12 @@ export async function GET() {
         continue;
       }
 
-      const totals = Array.from(studentTotals.entries()).map(
-        ([studentId, totalMarks]) => ({
-          studentId,
-          totalMarks,
-        }),
-      );
+      const totals = Array.from(
+        studentTotals.entries(),
+      ).map(([studentId, totalMarks]) => ({
+        studentId,
+        totalMarks,
+      }));
 
       const studentTotal =
         studentTotals.get(student.id);
@@ -248,17 +299,6 @@ export async function GET() {
 
     /*
      * Group the student's subject results by examination.
-     *
-     * Previously the API returned:
-     *
-     *   subject 1
-     *   subject 2
-     *   subject 3
-     *
-     * as separate examination records.
-     *
-     * Now all subjects belonging to the same examination
-     * are placed inside one subjectResults array.
      */
     const groupedResults = new Map<
       string,
@@ -282,22 +322,31 @@ export async function GET() {
     >();
 
     for (const result of results) {
-      const examinationId = result.examinationId;
+      const examinationId =
+        result.examinationId;
 
       if (!groupedResults.has(examinationId)) {
         groupedResults.set(examinationId, {
           id: examinationId,
           examinationId,
-          examinationName: result.examination.name,
-          termName: result.examination.term.name,
+          examinationName:
+            result.examination.name,
+          termName:
+            result.examination.term.name,
           academicYearName: String(
-            result.examination.term.academicYear.year,
+            result.examination.term
+              .academicYear.year,
           ),
-          gradeName: result.examination.grade.name,
+          gradeName:
+            result.examination.grade.name,
           totalMarks:
-            totalByExamination.get(examinationId) ?? 0,
+            totalByExamination.get(
+              examinationId,
+            ) ?? 0,
           position:
-            positionByExamination.get(examinationId) ?? null,
+            positionByExamination.get(
+              examinationId,
+            ) ?? null,
           subjectResults: [],
         });
       }
@@ -305,19 +354,17 @@ export async function GET() {
       const examinationResult =
         groupedResults.get(examinationId)!;
 
+      const marks = Number(result.marks);
+
       examinationResult.subjectResults.push({
         subjectId: result.subject.id,
         subjectName: result.subject.name,
-        marks: Number(result.marks),
-        cbcLevel: getCbcLevel(Number(result.marks)),
-        cbcPoints: getCbcPoints(Number(result.marks)),
+        marks,
+        cbcLevel: getCbcLevel(marks),
+        cbcPoints: getCbcPoints(marks),
       });
     }
 
-    /*
-     * Convert the grouped Map into the array expected by
-     * app/student/page.tsx.
-     */
     const groupedResultArray = Array.from(
       groupedResults.values(),
     );
@@ -326,7 +373,8 @@ export async function GET() {
       student: {
         id: student.id,
         name: student.name,
-        admissionNumber: student.admissionNumber,
+        admissionNumber:
+          student.admissionNumber,
         grade: student.grade.name,
         school: student.school.name,
       },
@@ -340,7 +388,10 @@ export async function GET() {
     );
 
     return NextResponse.json(
-      { error: "Failed to load examination results" },
+      {
+        error:
+          "Failed to load examination results",
+      },
       { status: 500 },
     );
   }

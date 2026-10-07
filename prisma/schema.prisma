@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 model School {
@@ -24,8 +24,8 @@ model School {
   administrators       Administrator[]
   announcements        Announcement[]
   grades               Grade[]
-  parentContacts       ParentContact[]
   parentAccounts       ParentAccount[]
+  parentContacts       ParentContact[]
   payments             Payment[]
   students             Student[]
   subscriptions        Subscription[]
@@ -102,9 +102,9 @@ model Student {
   parentContacts  ParentContact[]
   quizAttempts    QuizAttempt[]
   results         Result[]
-  sessions        StudentSession[]
   grade           Grade            @relation(fields: [gradeId], references: [id])
   school          School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  sessions        StudentSession[]
 
   @@index([schoolId])
   @@index([gradeId])
@@ -116,8 +116,7 @@ model StudentSession {
   studentId String
   expiresAt DateTime
   createdAt DateTime @default(now())
-
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@index([studentId])
   @@index([expiresAt])
@@ -157,8 +156,8 @@ model GradeSubject {
   id        String  @id @default(cuid())
   gradeId   String
   subjectId String
-  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   grade     Grade   @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
 
   @@unique([gradeId, subjectId])
 }
@@ -169,8 +168,8 @@ model TeacherAssignment {
   gradeId   String
   subjectId String
   createdAt DateTime @default(now())
-  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   grade     Grade    @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   teacher   Teacher  @relation(fields: [teacherId], references: [id], onDelete: Cascade)
 
   @@unique([teacherId, gradeId, subjectId])
@@ -236,10 +235,10 @@ model Result {
   marks         Float
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
-  teacher       Teacher?    @relation(fields: [teacherId], references: [id])
   examination   Examination @relation(fields: [examinationId], references: [id], onDelete: Cascade)
-  subject       Subject     @relation(fields: [subjectId], references: [id])
   student       Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject       Subject     @relation(fields: [subjectId], references: [id])
+  teacher       Teacher?    @relation(fields: [teacherId], references: [id])
 
   @@unique([studentId, subjectId, examinationId])
   @@index([studentId])
@@ -280,9 +279,9 @@ model Payment {
   paidAt         DateTime?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
+  school         School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
   term           Term          @relation(fields: [termId], references: [id], onDelete: Cascade)
-  school         School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
   @@index([schoolId])
   @@index([termId])
@@ -300,8 +299,8 @@ model ActivationPayment {
   verifiedById    String?
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
-  verifiedBy      Administrator?          @relation(fields: [verifiedById], references: [id])
   school          School                  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  verifiedBy      Administrator?          @relation(fields: [verifiedById], references: [id])
 
   @@index([schoolId])
   @@index([status])
@@ -336,8 +335,8 @@ model Quiz {
   published   Boolean        @default(false)
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
-  subject     Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   grade       Grade          @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+  subject     Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   teacher     Teacher        @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   attempts    QuizAttempt[]
   questions   QuizQuestion[]
@@ -392,14 +391,13 @@ model QuizAttempt {
 }
 
 model QuizAnswer {
-  id         String @id @default(cuid())
+  id         String       @id @default(cuid())
   attemptId  String
   questionId String
   optionId   String
-
-  attempt  QuizAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-  question QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  option   QuizOption   @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  attempt    QuizAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  option     QuizOption   @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  question   QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
   @@unique([attemptId, questionId])
   @@index([attemptId])
@@ -418,8 +416,8 @@ model ParentContact {
   updatedAt    DateTime                @updatedAt
   recipients   AnnouncementRecipient[]
   accountLinks ParentAccountContact[]
-  student      Student                 @relation(fields: [studentId], references: [id], onDelete: Cascade)
   school       School                  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student      Student                 @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@index([schoolId])
   @@index([studentId])
@@ -437,10 +435,10 @@ model Announcement {
   studentId       String?
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
-  student         Student?                @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  grade           Grade?                  @relation(fields: [gradeId], references: [id], onDelete: Cascade)
   administrator   Administrator           @relation(fields: [administratorId], references: [id], onDelete: Cascade)
+  grade           Grade?                  @relation(fields: [gradeId], references: [id], onDelete: Cascade)
   school          School                  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student         Student?                @relation(fields: [studentId], references: [id], onDelete: Cascade)
   recipients      AnnouncementRecipient[]
 
   @@index([schoolId])
@@ -456,8 +454,8 @@ model AnnouncementRecipient {
   parentContactId String
   readAt          DateTime?
   createdAt       DateTime      @default(now())
-  parentContact   ParentContact @relation(fields: [parentContactId], references: [id], onDelete: Cascade)
   announcement    Announcement  @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  parentContact   ParentContact @relation(fields: [parentContactId], references: [id], onDelete: Cascade)
 
   @@unique([announcementId, parentContactId])
   @@index([announcementId])

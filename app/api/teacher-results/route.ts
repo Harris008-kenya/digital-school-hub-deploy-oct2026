@@ -29,15 +29,35 @@ async function getTeacherExaminationAccess(
   }
 
   const examination =
-    await prisma.examination.findUnique({
+    await prisma.examination.findFirst({
       where: {
         id: examinationId,
+        grade: {
+          schoolId: teacher.schoolId,
+        },
       },
-      include: {
-        grade: true,
+      select: {
+        id: true,
+        name: true,
+        gradeId: true,
+        grade: {
+          select: {
+            id: true,
+            name: true,
+            level: true,
+            schoolId: true,
+          },
+        },
         term: {
-          include: {
-            academicYear: true,
+          select: {
+            id: true,
+            name: true,
+            academicYear: {
+              select: {
+                id: true,
+                year: true,
+              },
+            },
           },
         },
       },
@@ -46,19 +66,8 @@ async function getTeacherExaminationAccess(
   if (!examination) {
     return {
       error:
-        "The selected examination was not found",
+        "The selected examination was not found in your school",
       status: 404,
-    };
-  }
-
-  if (
-    examination.grade.schoolId !==
-    teacher.schoolId
-  ) {
-    return {
-      error:
-        "You are not authorized to access this examination",
-      status: 403,
     };
   }
 
@@ -94,14 +103,18 @@ export async function GET(request: Request) {
     searchParams.get("subjectId") || "";
 
   try {
+    /*
+     * Initial page load:
+     * Return the teacher's assignments and examinations
+     * for grades where the teacher has assignments.
+     */
     if (!examinationId && !subjectId) {
       const teacher = await getCurrentTeacher();
 
       if (!teacher) {
         return NextResponse.json(
           {
-            error:
-              "Teacher sign-in is required",
+            error: "Teacher sign-in is required",
           },
           { status: 401 }
         );
@@ -126,6 +139,18 @@ export async function GET(request: Request) {
         ),
       ];
 
+      if (gradeIds.length === 0) {
+        return NextResponse.json({
+          teacher: {
+            id: teacher.id,
+            name: teacher.name,
+            email: teacher.email,
+            assignments: [],
+          },
+          examinations: [],
+        });
+      }
+
       const examinations =
         await prisma.examination.findMany({
           where: {
@@ -136,11 +161,27 @@ export async function GET(request: Request) {
               schoolId: teacher.schoolId,
             },
           },
-          include: {
-            grade: true,
+          select: {
+            id: true,
+            name: true,
+            gradeId: true,
+            grade: {
+              select: {
+                id: true,
+                name: true,
+                level: true,
+              },
+            },
             term: {
-              include: {
-                academicYear: true,
+              select: {
+                id: true,
+                name: true,
+                academicYear: {
+                  select: {
+                    id: true,
+                    year: true,
+                  },
+                },
               },
             },
           },
@@ -149,18 +190,39 @@ export async function GET(request: Request) {
           },
         });
 
+      const assignments =
+        teacher.assignments.map(
+          (assignment) => ({
+            id: assignment.id,
+            teacherId: teacher.id,
+            gradeId: assignment.gradeId,
+            subjectId: assignment.subjectId,
+            grade: {
+              id: assignment.grade.id,
+              name: assignment.grade.name,
+              level: assignment.grade.level,
+            },
+            subject: {
+              id: assignment.subject.id,
+              name: assignment.subject.name,
+            },
+          })
+        );
+
       return NextResponse.json({
         teacher: {
           id: teacher.id,
           name: teacher.name,
           email: teacher.email,
-          assignments:
-            teacher.assignments,
+          assignments,
         },
         examinations,
       });
     }
 
+    /*
+     * Both parameters are required for a marks sheet.
+     */
     if (!examinationId || !subjectId) {
       return NextResponse.json(
         {
@@ -184,14 +246,24 @@ export async function GET(request: Request) {
       );
     }
 
+    /*
+     * Load learners and existing marks in parallel.
+     * Both queries are restricted to the teacher's school
+     * and the examination grade.
+     */
     const [students, results] =
       await Promise.all([
         prisma.student.findMany({
           where: {
-            gradeId:
-              access.examination.gradeId,
             schoolId:
               access.teacher.schoolId,
+            gradeId:
+              access.examination.gradeId,
+          },
+          select: {
+            id: true,
+            name: true,
+            admissionNumber: true,
           },
           orderBy: {
             name: "asc",
@@ -205,9 +277,12 @@ export async function GET(request: Request) {
             student: {
               schoolId:
                 access.teacher.schoolId,
+              gradeId:
+                access.examination.gradeId,
             },
           },
           select: {
+            id: true,
             studentId: true,
             marks: true,
           },
@@ -224,7 +299,12 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       examination: access.examination,
-      subject: access.assignment.subject,
+
+      subject: {
+        id: access.assignment.subject.id,
+        name: access.assignment.subject.name,
+      },
+
       students: students.map(
         (student) => ({
           student,
@@ -283,6 +363,14 @@ export async function POST(request: Request) {
       );
     }
 
+    /*
+     * This is the critical server-side authorization check.
+     * It verifies:
+     * - teacher session
+     * - teacher school
+     * - examination belongs to teacher's school
+     * - teacher is assigned to this grade + subject
+     */
     const access =
       await getTeacherExaminationAccess(
         examinationId,
@@ -302,7 +390,7 @@ export async function POST(request: Request) {
     for (const entry of entries) {
       const studentId =
         typeof entry.studentId === "string"
-          ? entry.studentId
+          ? entry.studentId.trim()
           : "";
 
       const marks =
@@ -325,6 +413,10 @@ export async function POST(request: Request) {
         );
       }
 
+      /*
+       * If a student appears twice in the request,
+       * the last value is used.
+       */
       marksByStudent.set(
         studentId,
         marks
@@ -335,16 +427,21 @@ export async function POST(request: Request) {
       ...marksByStudent.keys(),
     ];
 
+    /*
+     * Verify every submitted learner belongs to:
+     * - this school
+     * - the examination's grade
+     */
     const students =
       await prisma.student.findMany({
         where: {
           id: {
             in: studentIds,
           },
-          gradeId:
-            access.examination.gradeId,
           schoolId:
             access.teacher.schoolId,
+          gradeId:
+            access.examination.gradeId,
         },
         select: {
           id: true,
@@ -364,6 +461,11 @@ export async function POST(request: Request) {
       );
     }
 
+    /*
+     * Create new results or update existing results.
+     * The unique combination prevents duplicate result
+     * records for the same learner, subject and examination.
+     */
     await prisma.$transaction(
       studentIds.map((studentId) =>
         prisma.result.upsert({
@@ -375,6 +477,7 @@ export async function POST(request: Request) {
                 examinationId,
               },
           },
+
           update: {
             marks:
               marksByStudent.get(
@@ -383,6 +486,7 @@ export async function POST(request: Request) {
             teacherId:
               access.teacher.id,
           },
+
           create: {
             studentId,
             subjectId,
