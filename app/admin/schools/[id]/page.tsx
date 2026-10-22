@@ -79,13 +79,16 @@ export default async function SchoolDetailsPage({
 
   const now = new Date();
 
+  const isExpiryMissing =
+    school.activationExpiryDate === null;
+
   const isSchoolExpired =
     school.isActive &&
     school.activationExpiryDate !== null &&
     school.activationExpiryDate < now;
 
   const isSchoolActive =
-    school.isActive && !isSchoolExpired;
+    school.isActive && !isExpiryMissing && !isSchoolExpired;
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
@@ -208,11 +211,7 @@ export default async function SchoolDetailsPage({
                         : "text-red-700"
                   }`}
                 >
-                  {isSchoolExpired
-                    ? "Expired"
-                    : isSchoolActive
-                      ? "Active"
-                      : "Inactive"}
+                  {!school.isActive ? "Inactive" : isExpiryMissing ? "Expiry date not set" : isSchoolExpired ? "Expired" : "Active"}
                 </p>
               </div>
 

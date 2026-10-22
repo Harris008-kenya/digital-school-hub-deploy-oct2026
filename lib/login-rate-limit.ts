@@ -1,3 +1,5 @@
+
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 const MAX_FAILED_ATTEMPTS = 5;
@@ -5,6 +7,7 @@ const MAX_IP_FAILED_ATTEMPTS = 20;
 
 const WINDOW_MS = 15 * 60 * 1000;
 const BLOCK_DURATION_MS = 15 * 60 * 1000;
+const MAX_TRANSACTION_RETRIES = 3;
 
 export type LoginType =
   | "STUDENT"
@@ -16,17 +19,51 @@ function normalizeIdentifier(identifier: string) {
   return identifier.trim().toLowerCase();
 }
 
+function getPrismaErrorCode(error: unknown): string | null {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string"
+  ) {
+    return error.code;
+  }
+
+  return null;
+}
+
+async function serializableTransaction<T>(
+  operation: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  for (let attempt = 1; attempt <= MAX_TRANSACTION_RETRIES; attempt++) {
+    try {
+      return await prisma.$transaction(operation, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      });
+    } catch (error) {
+      const code = getPrismaErrorCode(error);
+      const retryable = code === "P2034" || code === "P2002";
+
+      if (!retryable || attempt === MAX_TRANSACTION_RETRIES) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error("Login rate-limit transaction failed.");
+}
+
 export function getClientIp(request: Request) {
   const forwardedFor = request.headers.get("x-forwarded-for");
 
   if (forwardedFor) {
-    return forwardedFor.split(",")[0].trim();
+    return forwardedFor.split(",")[0].trim() || "unknown";
   }
 
   const realIp = request.headers.get("x-real-ip");
 
   if (realIp) {
-    return realIp.trim();
+    return realIp.trim() || "unknown";
   }
 
   return "unknown";
@@ -35,93 +72,64 @@ export function getClientIp(request: Request) {
 export async function checkLoginRateLimit(
   loginType: LoginType,
   identifier: string,
-  ipAddress: string
+  ipAddress: string,
 ) {
-  const normalizedIdentifier =
-    normalizeIdentifier(identifier);
-
+  const normalizedIdentifier = normalizeIdentifier(identifier);
   const now = new Date();
 
-  const existing = await prisma.loginAttempt.findUnique({
-    where: {
-      loginType_identifier_ipAddress: {
-        loginType,
-        identifier: normalizedIdentifier,
-        ipAddress,
+  const [existing, existingIp] = await Promise.all([
+    prisma.loginAttempt.findUnique({
+      where: {
+        loginType_identifier_ipAddress: {
+          loginType,
+          identifier: normalizedIdentifier,
+          ipAddress,
+        },
       },
-    },
-  });
+    }),
+    prisma.loginIpAttempt.findUnique({
+      where: { ipAddress },
+    }),
+  ]);
 
-  const existingIp = await prisma.loginIpAttempt.findUnique({
-    where: {
-      ipAddress,
-    },
-  });
+  const ipWindowExpired =
+    existingIp !== null &&
+    now.getTime() - existingIp.windowStart.getTime() >= WINDOW_MS;
 
   if (
     existingIp?.blockedUntil &&
-    existingIp.blockedUntil > now
+    existingIp.blockedUntil > now &&
+    !ipWindowExpired
   ) {
-    const retryAfterSeconds = Math.ceil(
-      (existingIp.blockedUntil.getTime() - now.getTime()) /
-        1000
-    );
-
     return {
       allowed: false,
-      retryAfterSeconds,
+      retryAfterSeconds: Math.max(
+        1,
+        Math.ceil(
+          (existingIp.blockedUntil.getTime() - now.getTime()) / 1000,
+        ),
+      ),
     };
   }
 
-  if (
-    existingIp &&
-    now.getTime() -
-      existingIp.windowStart.getTime() >=
-      WINDOW_MS
-  ) {
-    await prisma.loginIpAttempt.update({
-      where: {
-        id: existingIp.id,
-      },
-      data: {
-        failedCount: 0,
-        windowStart: now,
-        blockedUntil: null,
-      },
-    });
-  }
+  const identifierWindowExpired =
+    existing !== null &&
+    now.getTime() - existing.windowStart.getTime() >= WINDOW_MS;
 
   if (
     existing?.blockedUntil &&
-    existing.blockedUntil > now
+    existing.blockedUntil > now &&
+    !identifierWindowExpired
   ) {
-    const retryAfterSeconds = Math.ceil(
-      (existing.blockedUntil.getTime() - now.getTime()) /
-        1000
-    );
-
     return {
       allowed: false,
-      retryAfterSeconds,
+      retryAfterSeconds: Math.max(
+        1,
+        Math.ceil(
+          (existing.blockedUntil.getTime() - now.getTime()) / 1000,
+        ),
+      ),
     };
-  }
-
-  if (
-    existing &&
-    now.getTime() -
-      existing.windowStart.getTime() >=
-      WINDOW_MS
-  ) {
-    await prisma.loginAttempt.update({
-      where: {
-        id: existing.id,
-      },
-      data: {
-        failedCount: 0,
-        windowStart: now,
-        blockedUntil: null,
-      },
-    });
   }
 
   return {
@@ -133,30 +141,13 @@ export async function checkLoginRateLimit(
 export async function recordFailedLogin(
   loginType: LoginType,
   identifier: string,
-  ipAddress: string
+  ipAddress: string,
 ) {
-  const normalizedIdentifier =
-    normalizeIdentifier(identifier);
-
+  const normalizedIdentifier = normalizeIdentifier(identifier);
   const now = new Date();
 
-  const existing = await prisma.loginAttempt.findUnique({
-    where: {
-      loginType_identifier_ipAddress: {
-        loginType,
-        identifier: normalizedIdentifier,
-        ipAddress,
-      },
-    },
-  });
-
-  if (
-    !existing ||
-    now.getTime() -
-      existing.windowStart.getTime() >=
-      WINDOW_MS
-  ) {
-    await prisma.loginAttempt.upsert({
+  return serializableTransaction(async (tx) => {
+    const existing = await tx.loginAttempt.findUnique({
       where: {
         loginType_identifier_ipAddress: {
           loginType,
@@ -164,114 +155,114 @@ export async function recordFailedLogin(
           ipAddress,
         },
       },
-      create: {
-        loginType,
-        identifier: normalizedIdentifier,
-        ipAddress,
-        failedCount: 1,
-        windowStart: now,
-        blockedUntil: null,
-      },
-      update: {
-        failedCount: 1,
-        windowStart: now,
-        blockedUntil: null,
-      },
     });
-  } else {
-    const newFailedCount =
-      existing.failedCount + 1;
 
-    const shouldBlock =
-      newFailedCount >= MAX_FAILED_ATTEMPTS;
+    let failedCount: number;
+    let identifierBlocked = false;
 
-    const blockedUntil = shouldBlock
-      ? new Date(now.getTime() + BLOCK_DURATION_MS)
-      : null;
+    if (
+      !existing ||
+      now.getTime() - existing.windowStart.getTime() >= WINDOW_MS
+    ) {
+      failedCount = 1;
 
-    await prisma.loginAttempt.update({
-      where: {
-        id: existing.id,
-      },
-      data: {
-        failedCount: newFailedCount,
-        blockedUntil,
-      },
+      await tx.loginAttempt.upsert({
+        where: {
+          loginType_identifier_ipAddress: {
+            loginType,
+            identifier: normalizedIdentifier,
+            ipAddress,
+          },
+        },
+        create: {
+          loginType,
+          identifier: normalizedIdentifier,
+          ipAddress,
+          failedCount,
+          windowStart: now,
+          blockedUntil: null,
+        },
+        update: {
+          failedCount,
+          windowStart: now,
+          blockedUntil: null,
+        },
+      });
+    } else {
+      failedCount = existing.failedCount + 1;
+      identifierBlocked = failedCount >= MAX_FAILED_ATTEMPTS;
+
+      await tx.loginAttempt.update({
+        where: { id: existing.id },
+        data: {
+          failedCount: { increment: 1 },
+          blockedUntil: identifierBlocked
+            ? new Date(now.getTime() + BLOCK_DURATION_MS)
+            : null,
+        },
+      });
+    }
+
+    const existingIp = await tx.loginIpAttempt.findUnique({
+      where: { ipAddress },
     });
-  }
 
-  const existingIp = await prisma.loginIpAttempt.findUnique({
-    where: {
-      ipAddress,
-    },
-  });
+    let ipFailedCount: number;
 
-  if (
-    !existingIp ||
-    now.getTime() -
-      existingIp.windowStart.getTime() >=
-      WINDOW_MS
-  ) {
-    await prisma.loginIpAttempt.upsert({
-      where: {
-        ipAddress,
-      },
-      create: {
-        ipAddress,
-        failedCount: 1,
-        windowStart: now,
-        blockedUntil: null,
-      },
-      update: {
-        failedCount: 1,
-        windowStart: now,
-        blockedUntil: null,
-      },
-    });
+    if (
+      !existingIp ||
+      now.getTime() - existingIp.windowStart.getTime() >= WINDOW_MS
+    ) {
+      ipFailedCount = 1;
+
+      await tx.loginIpAttempt.upsert({
+        where: { ipAddress },
+        create: {
+          ipAddress,
+          failedCount: ipFailedCount,
+          windowStart: now,
+          blockedUntil: null,
+        },
+        update: {
+          failedCount: ipFailedCount,
+          windowStart: now,
+          blockedUntil: null,
+        },
+      });
+    } else {
+      ipFailedCount = existingIp.failedCount + 1;
+
+      await tx.loginIpAttempt.update({
+        where: { id: existingIp.id },
+        data: {
+          failedCount: { increment: 1 },
+          blockedUntil:
+            ipFailedCount >= MAX_IP_FAILED_ATTEMPTS
+              ? new Date(now.getTime() + BLOCK_DURATION_MS)
+              : null,
+        },
+      });
+    }
+
+    const ipBlocked = ipFailedCount >= MAX_IP_FAILED_ATTEMPTS;
+    const blocked = identifierBlocked || ipBlocked;
 
     return {
-      blocked: false,
-      failedCount: 1,
-      retryAfterSeconds: 0,
+      blocked,
+      failedCount,
+      retryAfterSeconds: blocked
+        ? Math.ceil(BLOCK_DURATION_MS / 1000)
+        : 0,
     };
-  }
-
-  const newIpFailedCount =
-    existingIp.failedCount + 1;
-
-  const shouldBlockIp =
-    newIpFailedCount >= MAX_IP_FAILED_ATTEMPTS;
-
-  const blockedUntil = shouldBlockIp
-    ? new Date(now.getTime() + BLOCK_DURATION_MS)
-    : null;
-
-  await prisma.loginIpAttempt.update({
-    where: {
-      id: existingIp.id,
-    },
-    data: {
-      failedCount: newIpFailedCount,
-      blockedUntil,
-    },
   });
-
-  return {
-    blocked: shouldBlockIp,
-    failedCount: newIpFailedCount,
-    retryAfterSeconds: shouldBlockIp
-      ? Math.ceil(BLOCK_DURATION_MS / 1000)
-      : 0,
-  };
 }
 
 export async function clearFailedLogins(
   loginType: LoginType,
   identifier: string,
-  ipAddress: string
+  ipAddress: string,
 ) {
-  const normalizedIdentifier =
-    normalizeIdentifier(identifier);
+  const normalizedIdentifier = normalizeIdentifier(identifier);
 
   await prisma.loginAttempt.deleteMany({
     where: {
@@ -283,23 +274,17 @@ export async function clearFailedLogins(
 }
 
 export async function cleanupOldLoginAttempts() {
-  const cutoff = new Date(
-    Date.now() - 24 * 60 * 60 * 1000
-  );
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   await prisma.loginAttempt.deleteMany({
     where: {
-      updatedAt: {
-        lt: cutoff,
-      },
+      updatedAt: { lt: cutoff },
     },
   });
 
   await prisma.loginIpAttempt.deleteMany({
     where: {
-      updatedAt: {
-        lt: cutoff,
-      },
+      updatedAt: { lt: cutoff },
     },
   });
 }

@@ -1,5 +1,7 @@
+
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
+import { hasSchoolAccess } from "@/lib/school-activation";
 
 export const TEACHER_SESSION_COOKIE = "dsh_teacher_session";
 
@@ -100,11 +102,7 @@ export async function getCurrentTeacher() {
 
   const school = session.teacher.school;
 
-  const activationExpired =
-    school.activationExpiryDate !== null &&
-    school.activationExpiryDate < now;
-
-  if (!school.isActive || activationExpired) {
+  if (!hasSchoolAccess(school, now)) {
     await prisma.teacherSession.delete({
       where: { id: session.id },
     });

@@ -1,6 +1,8 @@
+
 import { redirect } from "next/navigation";
 import { getCurrentAdministrator } from "@/lib/administrator-session";
 import { prisma } from "@/lib/prisma";
+import { hasSchoolAccess } from "@/lib/school-activation";
 
 export async function requireActiveSchoolAdministrator() {
   const administrator = await getCurrentAdministrator();
@@ -9,6 +11,7 @@ export async function requireActiveSchoolAdministrator() {
     redirect("/login");
   }
 
+  // Platform administrators manage schools and their activation.
   if (administrator.role === "PLATFORM") {
     return administrator;
   }
@@ -33,13 +36,7 @@ export async function requireActiveSchoolAdministrator() {
     redirect("/admin");
   }
 
-  const now = new Date();
-
-  const isExpired =
-    school.activationExpiryDate !== null &&
-    school.activationExpiryDate < now;
-
-  if (!school.isActive || isExpired) {
+  if (!hasSchoolAccess(school)) {
     redirect("/admin");
   }
 

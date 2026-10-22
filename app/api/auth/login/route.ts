@@ -1,7 +1,9 @@
+
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { verifyPassword } from "@/lib/password";
 import { prisma } from "@/lib/prisma";
+import { hasSchoolAccess } from "@/lib/school-activation";
 import { TEACHER_SESSION_COOKIE } from "@/lib/teacher-session";
 import {
   checkLoginRateLimit,
@@ -14,7 +16,19 @@ const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    let body: {
+      email?: unknown;
+      password?: unknown;
+    };
+
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Please provide a valid request body." },
+        { status: 400 },
+      );
+    }
 
     const email =
       typeof body.email === "string"
@@ -28,22 +42,18 @@ export async function POST(request: Request) {
 
     if (!email || !password) {
       return NextResponse.json(
-        {
-          error:
-            "Email and password are required",
-        },
-        { status: 400 }
+        { error: "Email and password are required." },
+        { status: 400 },
       );
     }
 
     const ipAddress = getClientIp(request);
 
-    const rateLimit =
-      await checkLoginRateLimit(
-        "TEACHER",
-        email,
-        ipAddress
-      );
+    const rateLimit = await checkLoginRateLimit(
+      "TEACHER",
+      email,
+      ipAddress,
+    );
 
     if (!rateLimit.allowed) {
       const response = NextResponse.json(
@@ -51,113 +61,120 @@ export async function POST(request: Request) {
           error:
             "Too many failed login attempts. Please try again later.",
         },
-        { status: 429 }
+        { status: 429 },
       );
 
       response.headers.set(
         "Retry-After",
-        String(
-          rateLimit.retryAfterSeconds
-        )
+        String(rateLimit.retryAfterSeconds),
       );
 
       return response;
     }
 
-    const teacher =
-      await prisma.teacher.findUnique({
-        where: { email },
-        include: {
-          school: {
-            select: {
-              id: true,
-              isActive: true,
-              activationExpiryDate: true,
-            },
+    const teacher = await prisma.teacher.findUnique({
+      where: { email },
+      include: {
+        school: {
+          select: {
+            id: true,
+            isActive: true,
+            activationExpiryDate: true,
           },
         },
-      });
+      },
+    });
 
-    if (
-      !teacher ||
-      !verifyPassword(
-        password,
-        teacher.password
-      )
-    ) {
-      const failed =
-        await recordFailedLogin(
-          "TEACHER",
-          email,
-          ipAddress
-        );
+    if (!teacher) {
+      const failed = await recordFailedLogin(
+        "TEACHER",
+        email,
+        ipAddress,
+      );
 
       if (failed.blocked) {
-        const response =
-          NextResponse.json(
-            {
-              error:
-                "Too many failed login attempts. Please try again later.",
-            },
-            { status: 429 }
-          );
+        const response = NextResponse.json(
+          {
+            error:
+              "Too many failed login attempts. Please try again later.",
+          },
+          { status: 429 },
+        );
 
         response.headers.set(
           "Retry-After",
-          String(
-            failed.retryAfterSeconds
-          )
+          String(failed.retryAfterSeconds),
         );
 
         return response;
       }
 
       return NextResponse.json(
-        {
-          error:
-            "Invalid email or password",
-        },
-        { status: 401 }
+        { error: "Invalid email or password." },
+        { status: 401 },
       );
     }
 
-    const now = new Date();
+    const passwordIsValid = await verifyPassword(
+      password,
+      teacher.password,
+    );
 
-    const activationExpired =
-      teacher.school.activationExpiryDate !== null &&
-      teacher.school.activationExpiryDate < now;
+    if (!passwordIsValid) {
+      const failed = await recordFailedLogin(
+        "TEACHER",
+        email,
+        ipAddress,
+      );
 
-    if (
-      !teacher.school.isActive ||
-      activationExpired
-    ) {
+      if (failed.blocked) {
+        const response = NextResponse.json(
+          {
+            error:
+              "Too many failed login attempts. Please try again later.",
+          },
+          { status: 429 },
+        );
+
+        response.headers.set(
+          "Retry-After",
+          String(failed.retryAfterSeconds),
+        );
+
+        return response;
+      }
+
+      return NextResponse.json(
+        { error: "Invalid email or password." },
+        { status: 401 },
+      );
+    }
+
+    if (!hasSchoolAccess(teacher.school)) {
       return NextResponse.json(
         {
           error:
             "This school is currently inactive or its activation has expired.",
         },
-        { status: 403 }
+        { status: 403 },
       );
     }
 
     await clearFailedLogins(
       "TEACHER",
       email,
-      ipAddress
+      ipAddress,
     );
 
-    const token =
-      randomBytes(32).toString("hex");
+    const token = randomBytes(32).toString("hex");
 
     const expiresAt = new Date(
-      Date.now() + SESSION_DURATION_MS
+      Date.now() + SESSION_DURATION_MS,
     );
 
     await prisma.$transaction([
       prisma.teacherSession.deleteMany({
-        where: {
-          teacherId: teacher.id,
-        },
+        where: { teacherId: teacher.id },
       }),
 
       prisma.teacherSession.create({
@@ -169,40 +186,28 @@ export async function POST(request: Request) {
       }),
     ]);
 
-    const response =
-      NextResponse.json({
-        teacher: {
-          id: teacher.id,
-          name: teacher.name,
-        },
-      });
+    const response = NextResponse.json({
+      teacher: {
+        id: teacher.id,
+        name: teacher.name,
+      },
+    });
 
-    response.cookies.set(
-      TEACHER_SESSION_COOKIE,
-      token,
-      {
-        httpOnly: true,
-        sameSite: "lax",
-        secure:
-          process.env.NODE_ENV ===
-          "production",
-        path: "/",
-        expires: expiresAt,
-      }
-    );
+    response.cookies.set(TEACHER_SESSION_COOKIE, token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      expires: expiresAt,
+    });
 
     return response;
   } catch (error) {
-    console.error(
-      "Error signing in teacher:",
-      error
-    );
+    console.error("Error signing in teacher:", error);
 
     return NextResponse.json(
-      {
-        error: "Could not sign in",
-      },
-      { status: 500 }
+      { error: "Could not sign in." },
+      { status: 500 },
     );
   }
 }

@@ -1,8 +1,10 @@
+
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { verifyPassword } from "@/lib/password";
+import { hasSchoolAccess } from "@/lib/school-activation";
 import { STUDENT_SESSION_COOKIE } from "@/lib/student-session";
 import {
   checkLoginRateLimit,
@@ -48,12 +50,12 @@ function splitStudentName(name: string) {
 
 async function recordFailedAttempt(
   loginIdentifier: string,
-  ipAddress: string
+  ipAddress: string,
 ) {
   const failed = await recordFailedLogin(
     "STUDENT",
     loginIdentifier,
-    ipAddress
+    ipAddress,
   );
 
   if (failed.blocked) {
@@ -62,28 +64,41 @@ async function recordFailedAttempt(
         error:
           "Too many failed login attempts. Please try again later.",
       },
-      { status: 429 }
+      { status: 429 },
     );
 
     response.headers.set(
       "Retry-After",
-      String(failed.retryAfterSeconds)
+      String(failed.retryAfterSeconds),
     );
 
     return response;
   }
 
   return NextResponse.json(
-    {
-      error: "Invalid student login details.",
-    },
-    { status: 401 }
+    { error: "Invalid student login details." },
+    { status: 401 },
   );
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    let body: {
+      schoolId?: unknown;
+      firstName?: unknown;
+      secondName?: unknown;
+      admissionNumber?: unknown;
+      password?: unknown;
+    };
+
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Please provide a valid request body." },
+        { status: 400 },
+      );
+    }
 
     const schoolId =
       typeof body.schoolId === "string"
@@ -122,30 +137,25 @@ export async function POST(request: Request) {
           error:
             "School, first name, second name, admission number and password are required.",
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     const ipAddress = getClientIp(request);
 
-    const normalizedFirstName =
-      normalizeName(firstName);
-
-    const normalizedSecondName =
-      normalizeName(secondName);
-
+    const normalizedFirstName = normalizeName(firstName);
+    const normalizedSecondName = normalizeName(secondName);
     const normalizedAdmission =
       normalizeAdmissionNumber(admissionNumber);
 
     const loginIdentifier =
       `${schoolId}:${normalizedFirstName}:${normalizedSecondName}:${normalizedAdmission}`;
 
-    const rateLimit =
-      await checkLoginRateLimit(
-        "STUDENT",
-        loginIdentifier,
-        ipAddress
-      );
+    const rateLimit = await checkLoginRateLimit(
+      "STUDENT",
+      loginIdentifier,
+      ipAddress,
+    );
 
     if (!rateLimit.allowed) {
       const response = NextResponse.json(
@@ -153,25 +163,19 @@ export async function POST(request: Request) {
           error:
             "Too many failed login attempts. Please try again later.",
         },
-        { status: 429 }
+        { status: 429 },
       );
 
       response.headers.set(
         "Retry-After",
-        String(rateLimit.retryAfterSeconds)
+        String(rateLimit.retryAfterSeconds),
       );
 
       return response;
     }
 
-    /*
-     * First verify that the school exists and is currently active.
-     * Only the fields needed for this check are selected.
-     */
     const school = await prisma.school.findUnique({
-      where: {
-        id: schoolId,
-      },
+      where: { id: schoolId },
       select: {
         id: true,
         name: true,
@@ -181,38 +185,23 @@ export async function POST(request: Request) {
     });
 
     if (!school) {
-      return recordFailedAttempt(
-        loginIdentifier,
-        ipAddress
-      );
+      return recordFailedAttempt(loginIdentifier, ipAddress);
     }
 
     const now = new Date();
 
-    const activationExpired =
-      school.activationExpiryDate !== null &&
-      school.activationExpiryDate < now;
-
-    if (!school.isActive || activationExpired) {
+    if (!hasSchoolAccess(school, now)) {
       return NextResponse.json(
         {
           error:
             "This school is currently inactive or its activation has expired.",
         },
-        { status: 403 }
+        { status: 403 },
       );
     }
 
-    /*
-     * IMPORTANT:
-     * Do not load every student in the school.
-     *
-     * Admission number is first used to narrow the database
-     * query to the possible student(s). We deliberately do not
-     * assume that a unique database constraint currently exists,
-     * because the project's migration history needs separate
-     * cleanup.
-     */
+    // Narrow the search to possible matches instead of loading
+    // every student belonging to the school.
     const candidateStudents =
       await prisma.student.findMany({
         where: {
@@ -239,30 +228,13 @@ export async function POST(request: Request) {
         take: 2,
       });
 
-    /*
-     * The login must identify exactly one student.
-     *
-     * If duplicate admission numbers somehow exist, reject the
-     * login instead of accidentally authenticating the wrong
-     * student.
-     */
+    // Reject ambiguous records instead of authenticating the wrong student.
     if (candidateStudents.length !== 1) {
-      return recordFailedAttempt(
-        loginIdentifier,
-        ipAddress
-      );
+      return recordFailedAttempt(loginIdentifier, ipAddress);
     }
 
     const student = candidateStudents[0];
-
-    /*
-     * The stored student name is intentionally required to contain
-     * exactly two names. This prevents a hypothetical record such as
-     * "John Peter Kamau" from being accepted when the user enters
-     * only "John Peter".
-     */
-    const storedNames =
-      splitStudentName(student.name);
+    const storedNames = splitStudentName(student.name);
 
     if (
       !storedNames.hasExactlyTwoNames ||
@@ -271,60 +243,38 @@ export async function POST(request: Request) {
       normalizeName(storedNames.secondName) !==
         normalizedSecondName
     ) {
-      return recordFailedAttempt(
-        loginIdentifier,
-        ipAddress
-      );
+      return recordFailedAttempt(loginIdentifier, ipAddress);
     }
 
     if (!student.passwordHash) {
-      return recordFailedAttempt(
-        loginIdentifier,
-        ipAddress
-      );
+      return recordFailedAttempt(loginIdentifier, ipAddress);
     }
 
-    const passwordIsValid =
-      await verifyPassword(
-        password,
-        student.passwordHash
-      );
+    const passwordIsValid = await verifyPassword(
+      password,
+      student.passwordHash,
+    );
 
     if (!passwordIsValid) {
-      return recordFailedAttempt(
-        loginIdentifier,
-        ipAddress
-      );
+      return recordFailedAttempt(loginIdentifier, ipAddress);
     }
 
     await clearFailedLogins(
       "STUDENT",
       loginIdentifier,
-      ipAddress
+      ipAddress,
     );
 
-    /*
-     * Create a fresh session token.
-     *
-     * Existing sessions for this student are removed so that
-     * an old login token cannot remain active indefinitely.
-     */
     const token = randomBytes(32).toString("hex");
 
     const expiresAt = new Date(
       Date.now() +
-        SESSION_DURATION_DAYS *
-          24 *
-          60 *
-          60 *
-          1000
+        SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000,
     );
 
     await prisma.$transaction([
       prisma.studentSession.deleteMany({
-        where: {
-          studentId: student.id,
-        },
+        where: { studentId: student.id },
       }),
 
       prisma.studentSession.create({
@@ -337,57 +287,39 @@ export async function POST(request: Request) {
     ]);
 
     const cookieStore = await cookies();
+    const secure = process.env.NODE_ENV === "production";
 
-    const secure =
-      process.env.NODE_ENV === "production";
+    // Clear other portal cookies before establishing this session.
+    cookieStore.set(TEACHER_SESSION_COOKIE, "", {
+      httpOnly: true,
+      secure,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
+    });
 
-    /*
-     * Clear any other portal session before establishing
-     * the student session.
-     */
-    cookieStore.set(
-      TEACHER_SESSION_COOKIE,
-      "",
-      {
-        httpOnly: true,
-        secure,
-        sameSite: "lax",
-        path: "/",
-        maxAge: 0,
-      }
-    );
+    cookieStore.set(ADMINISTRATOR_SESSION_COOKIE, "", {
+      httpOnly: true,
+      secure,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
+    });
 
-    cookieStore.set(
-      ADMINISTRATOR_SESSION_COOKIE,
-      "",
-      {
-        httpOnly: true,
-        secure,
-        sameSite: "lax",
-        path: "/",
-        maxAge: 0,
-      }
-    );
-
-    cookieStore.set(
-      STUDENT_SESSION_COOKIE,
-      token,
-      {
-        httpOnly: true,
-        secure,
-        sameSite: "lax",
-        path: "/",
-        maxAge: SESSION_DURATION_SECONDS,
-      }
-    );
+    cookieStore.set(STUDENT_SESSION_COOKIE, token, {
+      httpOnly: true,
+      secure,
+      sameSite: "lax",
+      path: "/",
+      maxAge: SESSION_DURATION_SECONDS,
+    });
 
     return NextResponse.json({
       success: true,
       student: {
         id: student.id,
         name: student.name,
-        admissionNumber:
-          student.admissionNumber,
+        admissionNumber: student.admissionNumber,
         schoolId: student.schoolId,
         schoolName: school.name,
         gradeId: student.gradeId,
@@ -395,17 +327,14 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    console.error(
-      "Student login error:",
-      error
-    );
+    console.error("Student login error:", error);
 
     return NextResponse.json(
       {
         error:
           "An unexpected error occurred during student login.",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

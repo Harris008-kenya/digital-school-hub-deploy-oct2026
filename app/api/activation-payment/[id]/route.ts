@@ -1,16 +1,110 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentAdministrator } from "@/lib/administrator-session";
 
 type ActivationPaymentRouteProps = {
-  params: Promise<{
-    id: string;
-  }>;
+  params: Promise<{ id: string }>;
 };
+
+class PaymentAlreadyProcessedError extends Error {
+  constructor() {
+    super("This activation payment has already been processed.");
+    this.name = "PaymentAlreadyProcessedError";
+  }
+}
+
+async function processPayment(
+  id: string,
+  action: "APPROVE" | "REJECT",
+  administratorId: string,
+) {
+  return prisma.$transaction(
+    async (tx) => {
+      const verifiedAt = new Date();
+
+      const transition = await tx.activationPayment.updateMany({
+        where: {
+          id,
+          status: "PENDING",
+        },
+        data: {
+          status: action === "APPROVE" ? "APPROVED" : "REJECTED",
+          verifiedAt,
+          verifiedById: administratorId,
+        },
+      });
+
+      if (transition.count !== 1) {
+        throw new PaymentAlreadyProcessedError();
+      }
+
+      const payment = await tx.activationPayment.findUnique({
+        where: { id },
+      });
+
+      if (!payment) {
+        throw new Error(
+          "Activation payment not found during verification.",
+        );
+      }
+
+      const schoolBeforeUpdate = await tx.school.findUnique({
+        where: { id: payment.schoolId },
+        select: {
+          id: true,
+          name: true,
+          isActive: true,
+          activatedAt: true,
+          activationExpiryDate: true,
+        },
+      });
+
+      if (!schoolBeforeUpdate) {
+        throw new Error(
+          "School not found during payment verification.",
+        );
+      }
+
+      if (action === "REJECT") {
+        return {
+          payment,
+          school: schoolBeforeUpdate,
+        };
+      }
+
+      // Approval activates the school but intentionally does not
+      // change activationExpiryDate. Only the Platform Administrator
+      // can assign or extend that date through the expiry endpoint.
+      const school = await tx.school.update({
+        where: { id: payment.schoolId },
+        data: {
+          isActive: true,
+          activatedAt: schoolBeforeUpdate.activatedAt ?? verifiedAt,
+        },
+        select: {
+          id: true,
+          name: true,
+          isActive: true,
+          activatedAt: true,
+          activationExpiryDate: true,
+        },
+      });
+
+      return {
+        payment,
+        school,
+      };
+    },
+    {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    },
+  );
+}
 
 export async function PATCH(
   request: Request,
-  { params }: ActivationPaymentRouteProps
+  { params }: ActivationPaymentRouteProps,
 ) {
   try {
     const administrator = await getCurrentAdministrator();
@@ -21,7 +115,7 @@ export async function PATCH(
           success: false,
           message: "Administrator authentication required.",
         },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
@@ -31,7 +125,7 @@ export async function PATCH(
           success: false,
           message: "Platform Administrator access required.",
         },
-        { status: 403 }
+        { status: 403 },
       );
     }
 
@@ -43,11 +137,23 @@ export async function PATCH(
           success: false,
           message: "Activation payment ID is required.",
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    const body = await request.json();
+    let body: { action?: unknown };
+
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Please provide a valid request body.",
+        },
+        { status: 400 },
+      );
+    }
 
     const action =
       typeof body.action === "string"
@@ -60,136 +166,97 @@ export async function PATCH(
           success: false,
           message: "Action must be APPROVE or REJECT.",
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    const activationPayment =
-      await prisma.activationPayment.findUnique({
-        where: {
-          id,
-        },
-        include: {
-          school: true,
-        },
-      });
+    const existingPayment = await prisma.activationPayment.findUnique({
+      where: { id },
+      select: { id: true },
+    });
 
-    if (!activationPayment) {
+    if (!existingPayment) {
       return NextResponse.json(
         {
           success: false,
           message: "Activation payment not found.",
         },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
-    if (activationPayment.status !== "PENDING") {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "This activation payment has already been processed.",
-        },
-        { status: 400 }
+    let result:
+      | Awaited<ReturnType<typeof processPayment>>
+      | undefined;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        result = await processPayment(
+          id,
+          action,
+          administrator.id,
+        );
+        break;
+      } catch (error: unknown) {
+        if (error instanceof PaymentAlreadyProcessedError) {
+          return NextResponse.json(
+            { success: false, message: error.message },
+            { status: 409 },
+          );
+        }
+
+        const isSerializationConflict =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2034";
+
+        if (!isSerializationConflict || attempt === 2) {
+          throw error;
+        }
+      }
+    }
+
+    if (!result) {
+      throw new Error(
+        "Payment verification could not be completed.",
       );
     }
 
-    if (action === "APPROVE") {
-      const activatedAt = new Date();
+    let message: string;
 
-      const activationExpiryDate = new Date(activatedAt);
-      activationExpiryDate.setMonth(
-        activationExpiryDate.getMonth() + 3
-      );
-
-      const result = await prisma.$transaction(async (tx) => {
-        const payment = await tx.activationPayment.update({
-          where: {
-            id: activationPayment.id,
-          },
-          data: {
-            status: "APPROVED",
-            verifiedAt: activatedAt,
-            verifiedById: administrator.id,
-          },
-        });
-
-        const school = await tx.school.update({
-          where: {
-            id: activationPayment.schoolId,
-          },
-          data: {
-            isActive: true,
-            activatedAt,
-            activationExpiryDate,
-          },
-        });
-
-        return {
-          payment,
-          school,
-        };
-      });
-
-      return NextResponse.json({
-        success: true,
-        message:
-          "Activation payment approved and school activated successfully.",
-        payment: {
-          id: result.payment.id,
-          status: result.payment.status,
-          transactionCode: result.payment.transactionCode,
-          verifiedAt: result.payment.verifiedAt,
-        },
-        school: {
-          id: result.school.id,
-          name: result.school.name,
-          isActive: result.school.isActive,
-          activatedAt: result.school.activatedAt,
-          activationExpiryDate:
-            result.school.activationExpiryDate,
-        },
-      });
+    if (action === "REJECT") {
+      message = "Activation payment rejected.";
+    } else if (result.school.activationExpiryDate === null) {
+      message =
+        "Payment approved and school activated. No expiry date is assigned, so school access remains blocked until the Platform Administrator assigns one.";
+    } else {
+      message =
+        "Payment approved and school activated. The existing expiry date was preserved; only the Platform Administrator can change it.";
     }
-
-    const payment = await prisma.activationPayment.update({
-      where: {
-        id: activationPayment.id,
-      },
-      data: {
-        status: "REJECTED",
-        verifiedAt: new Date(),
-        verifiedById: administrator.id,
-      },
-    });
 
     return NextResponse.json({
       success: true,
-      message: "Activation payment rejected.",
+      message,
       payment: {
-        id: payment.id,
-        status: payment.status,
-        transactionCode: payment.transactionCode,
-        verifiedAt: payment.verifiedAt,
+        id: result.payment.id,
+        status: result.payment.status,
+        transactionCode: result.payment.transactionCode,
+        verifiedAt: result.payment.verifiedAt,
       },
-      school: {
-        id: activationPayment.school.id,
-        name: activationPayment.school.name,
-        isActive: activationPayment.school.isActive,
-        activationExpiryDate:
-          activationPayment.school.activationExpiryDate,
-      },
+      school: result.school,
     });
-  } catch (error) {
-    console.error("Activation payment verification error:", error);
+  } catch (error: unknown) {
+    console.error(
+      "Activation payment verification error:",
+      error,
+    );
 
     return NextResponse.json(
       {
         success: false,
-        message: "Unable to process activation payment.",
+        message:
+          "Unable to process activation payment. Please try again.",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

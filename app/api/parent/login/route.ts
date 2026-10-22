@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { compare } from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import { hasSchoolAccess } from "@/lib/school-activation";
 import { createParentSession } from "@/lib/parent-session";
 import {
   checkLoginRateLimit,
@@ -174,14 +175,7 @@ export async function POST(request: Request) {
 
     const now = new Date();
 
-    const activationExpired =
-      parentAccount.school.activationExpiryDate !== null &&
-      parentAccount.school.activationExpiryDate < now;
-
-    if (
-      !parentAccount.school.isActive ||
-      activationExpired
-    ) {
+    if (!hasSchoolAccess(parentAccount.school, now)) {
       return NextResponse.json(
         {
           error:

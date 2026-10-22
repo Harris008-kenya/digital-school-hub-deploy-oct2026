@@ -279,13 +279,16 @@ export default async function AdminDashboard() {
 
   const now = new Date();
 
+  const isExpiryMissing =
+    school.activationExpiryDate === null;
+
   const isSchoolExpired =
     school.isActive &&
     school.activationExpiryDate !== null &&
     school.activationExpiryDate < now;
 
   const isSchoolActive =
-    school.isActive && !isSchoolExpired;
+    school.isActive && !isExpiryMissing && !isSchoolExpired;
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
@@ -364,28 +367,25 @@ export default async function AdminDashboard() {
                     : "bg-red-100 text-red-700"
               }`}
             >
-              {isSchoolExpired
-                ? "Expired"
-                : isSchoolActive
-                  ? "Active"
-                  : "Inactive"}
+              {!school.isActive ? "Inactive" : isExpiryMissing ? "Expiry date not set" : isSchoolExpired ? "Expired" : "Active"}
             </div>
           </div>
         </div>
 
-        {isSchoolExpired ? (
+        {school.isActive && (isSchoolExpired || isExpiryMissing) ? (
           <div className="mb-8 rounded-2xl bg-red-50 p-8 text-center ring-1 ring-red-200">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-xl font-bold text-red-700">
               !
             </div>
 
             <h3 className="mt-4 text-xl font-bold text-red-900">
-              School Activation Expired
+              {isExpiryMissing
+                ? "School Expiry Date Not Set"
+                : "School Activation Expired"}
             </h3>
 
             <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-red-800">
-              Your school's activation period has expired.
-              School management functions are currently locked.
+              {isExpiryMissing ? "The Platform Administrator must set an expiry date before this school can use school management functions." : "Your school's activation period has expired. School management functions are currently locked."}
             </p>
 
             {school.activationExpiryDate && (
@@ -621,11 +621,7 @@ export default async function AdminDashboard() {
 
             <p>
               <strong>Activation Status:</strong>{" "}
-              {isSchoolExpired
-                ? "Expired"
-                : isSchoolActive
-                  ? "Active"
-                  : "Inactive"}
+              {!school.isActive ? "Inactive" : isExpiryMissing ? "Expiry date not set" : isSchoolExpired ? "Expired" : "Active"}
             </p>
 
             <p>

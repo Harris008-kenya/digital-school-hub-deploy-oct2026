@@ -1,5 +1,7 @@
+
 import { getCurrentAdministrator } from "@/lib/administrator-session";
 import { prisma } from "@/lib/prisma";
+import { hasSchoolAccess } from "@/lib/school-activation";
 
 export async function getActiveSchoolAdministrator() {
   const administrator = await getCurrentAdministrator();
@@ -48,13 +50,7 @@ export async function getActiveSchoolAdministrator() {
     };
   }
 
-  const now = new Date();
-
-  const isExpired =
-    school.activationExpiryDate !== null &&
-    school.activationExpiryDate < now;
-
-  if (!school.isActive || isExpired) {
+  if (!hasSchoolAccess(school)) {
     return {
       administrator: null,
       error:

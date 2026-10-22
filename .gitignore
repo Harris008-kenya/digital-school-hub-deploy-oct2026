@@ -74,3 +74,12 @@ prisma/schema.after-db-pull.backup.prisma
 prisma/schema.before-parent-push.backup.prisma
 prisma/schema.before-parent-push.prisma
 prisma/schema.backup.prisma
+
+.vercel
+.env*
+
+# Keep Prisma migration SQL files under version control
+!prisma/migrations/**/*.sql
+
+# Preserve archived original SQLite migration SQL files
+!prisma/migrations-sqlite-archive-20261022/**/*.sql

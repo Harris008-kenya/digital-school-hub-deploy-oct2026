@@ -27,9 +27,12 @@ const GRADE_7_TO_9_SUBJECTS = [
 
 export async function GET() {
   try {
+    const now = new Date();
+
     const schools = await prisma.school.findMany({
       where: {
         isActive: true,
+        activationExpiryDate: { gte: now },
       },
       select: {
         id: true,
@@ -66,8 +69,7 @@ export async function POST(request: Request) {
     if (administrator.role !== "PLATFORM") {
       return NextResponse.json(
         {
-          error:
-            "Only a Platform Administrator can create schools",
+          error: "Only a Platform Administrator can create schools",
         },
         { status: 403 },
       );
@@ -76,9 +78,7 @@ export async function POST(request: Request) {
     const body = await request.json();
 
     const name =
-      typeof body.name === "string"
-        ? body.name.trim()
-        : "";
+      typeof body.name === "string" ? body.name.trim() : "";
 
     const code =
       typeof body.code === "string"
@@ -91,173 +91,121 @@ export async function POST(request: Request) {
         : "";
 
     const phone =
-      typeof body.phone === "string"
-        ? body.phone.trim()
-        : "";
+      typeof body.phone === "string" ? body.phone.trim() : "";
 
     const address =
-      typeof body.address === "string"
-        ? body.address.trim()
-        : "";
+      typeof body.address === "string" ? body.address.trim() : "";
 
     if (!name || !code) {
       return NextResponse.json(
-        {
-          error:
-            "School name and school code are required",
-        },
+        { error: "School name and school code are required" },
         { status: 400 },
       );
     }
 
-    const existingSchool =
-      await prisma.school.findUnique({
-        where: {
-          code,
-        },
-      });
+    const existingSchool = await prisma.school.findUnique({
+      where: { code },
+    });
 
     if (existingSchool) {
       return NextResponse.json(
-        {
-          error:
-            "A school with this code already exists",
-        },
+        { error: "A school with this code already exists" },
         { status: 409 },
       );
     }
 
-    /*
-     * Create the school, Grades 1–9, subjects and
-     * GradeSubject assignments in one transaction.
-     *
-     * If any part fails, the whole operation is rolled back.
-     */
-    const result = await prisma.$transaction(
-      async (tx) => {
-        const school = await tx.school.create({
+    const result = await prisma.$transaction(async (tx) => {
+      const school = await tx.school.create({
+        data: {
+          name,
+          code,
+          email: email || null,
+          phone: phone || null,
+          address: address || null,
+          isActive: false,
+        },
+      });
+
+      const subjectNames = Array.from(
+        new Set([
+          ...GRADE_1_TO_6_SUBJECTS,
+          ...GRADE_7_TO_9_SUBJECTS,
+        ]),
+      );
+
+      const subjects = new Map<string, { id: string; name: string }>();
+
+      for (const subjectName of subjectNames) {
+        let subject = await tx.subject.findUnique({
+          where: { name: subjectName },
+          select: { id: true, name: true },
+        });
+
+        if (!subject) {
+          subject = await tx.subject.create({
+            data: { name: subjectName },
+            select: { id: true, name: true },
+          });
+        }
+
+        subjects.set(subjectName, subject);
+      }
+
+      const createdGrades: {
+        id: string;
+        level: number;
+        name: string;
+      }[] = [];
+
+      for (let level = 1; level <= 9; level += 1) {
+        const grade = await tx.grade.create({
           data: {
-            name,
-            code,
-            email: email || null,
-            phone: phone || null,
-            address: address || null,
-            isActive: false,
+            name: `Grade ${level}`,
+            level,
+            schoolId: school.id,
+          },
+          select: {
+            id: true,
+            level: true,
+            name: true,
           },
         });
 
-        /*
-         * Subjects are global in the database because
-         * Subject.name is unique.
-         *
-         * Therefore, reuse an existing subject when it
-         * already exists, otherwise create it.
-         */
-        const subjectNames = Array.from(
-          new Set([
-            ...GRADE_1_TO_6_SUBJECTS,
-            ...GRADE_7_TO_9_SUBJECTS,
-          ]),
-        );
+        createdGrades.push(grade);
+      }
 
-        const subjects = new Map<
-          string,
-          { id: string; name: string }
-        >();
+      for (const grade of createdGrades) {
+        const subjectNamesForGrade =
+          grade.level <= 6
+            ? GRADE_1_TO_6_SUBJECTS
+            : GRADE_7_TO_9_SUBJECTS;
 
-        for (const subjectName of subjectNames) {
-          let subject =
-            await tx.subject.findUnique({
-              where: {
-                name: subjectName,
-              },
-              select: {
-                id: true,
-                name: true,
-              },
-            });
+        await tx.gradeSubject.createMany({
+          data: subjectNamesForGrade.map((subjectName) => ({
+            gradeId: grade.id,
+            subjectId: subjects.get(subjectName)!.id,
+          })),
+        });
+      }
 
-          if (!subject) {
-            subject = await tx.subject.create({
-              data: {
-                name: subjectName,
-              },
-              select: {
-                id: true,
-                name: true,
-              },
-            });
-          }
-
-          subjects.set(subjectName, subject);
-        }
-
-        /*
-         * Create Grades 1–9 for this school.
-         */
-        const createdGrades: {
-          id: string;
-          level: number;
-          name: string;
-        }[] = [];
-
-        for (let level = 1; level <= 9; level += 1) {
-          const grade = await tx.grade.create({
-            data: {
-              name: `Grade ${level}`,
-              level,
-              schoolId: school.id,
-            },
-            select: {
-              id: true,
-              level: true,
-              name: true,
-            },
-          });
-
-          createdGrades.push(grade);
-        }
-
-        /*
-         * Assign the correct CBC subjects to each grade.
-         */
-        for (const grade of createdGrades) {
-          const subjectNamesForGrade =
-            grade.level <= 6
-              ? GRADE_1_TO_6_SUBJECTS
-              : GRADE_7_TO_9_SUBJECTS;
-
-          await tx.gradeSubject.createMany({
-            data: subjectNamesForGrade.map(
-              (subjectName) => ({
-                gradeId: grade.id,
-                subjectId:
-                  subjects.get(subjectName)!.id,
-              }),
-            ),
-          });
-        }
-
-        return {
-          school,
-          gradesCreated: createdGrades.length,
-          gradeSubjectAssignmentsCreated:
-            createdGrades.reduce(
-              (total, grade) =>
-                total +
-                (grade.level <= 6
-                  ? GRADE_1_TO_6_SUBJECTS.length
-                  : GRADE_7_TO_9_SUBJECTS.length),
-              0,
-            ),
-        };
-      },
-    );
+      return {
+        school,
+        gradesCreated: createdGrades.length,
+        gradeSubjectAssignmentsCreated: createdGrades.reduce(
+          (total, grade) =>
+            total +
+            (grade.level <= 6
+              ? GRADE_1_TO_6_SUBJECTS.length
+              : GRADE_7_TO_9_SUBJECTS.length),
+          0,
+        ),
+      };
+    });
 
     return NextResponse.json(
       {
         message:
-          "School created successfully with Grades 1–9 and CBC subjects",
+          "School created successfully with Grades 1-9 and CBC subjects.",
         school: result.school,
         setup: {
           gradesCreated: result.gradesCreated,
@@ -268,15 +216,10 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch (error) {
-    console.error(
-      "Error creating school:",
-      error,
-    );
+    console.error("Error creating school:", error);
 
     return NextResponse.json(
-      {
-        error: "Failed to create school",
-      },
+      { error: "Failed to create school" },
       { status: 500 },
     );
   }

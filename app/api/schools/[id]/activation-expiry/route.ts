@@ -3,24 +3,22 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentAdministrator } from "@/lib/administrator-session";
 
 type RouteContext = {
-  params: Promise<{
-    id: string;
-  }>;
+  params: Promise<{ id: string }>;
 };
+
+const KENYA_UTC_OFFSET_MS = 3 * 60 * 60 * 1000;
 
 export async function PATCH(
   request: Request,
-  { params }: RouteContext
+  { params }: RouteContext,
 ) {
   try {
     const administrator = await getCurrentAdministrator();
 
     if (!administrator) {
       return NextResponse.json(
-        {
-          error: "Administrator sign-in is required.",
-        },
-        { status: 401 }
+        { error: "Administrator sign-in is required." },
+        { status: 401 },
       );
     }
 
@@ -28,75 +26,95 @@ export async function PATCH(
       return NextResponse.json(
         {
           error:
-            "Only the Platform Administrator can change the activation expiry date.",
+            "Only the Platform Administrator can change the expiry date.",
         },
-        { status: 403 }
+        { status: 403 },
       );
     }
 
     const { id } = await params;
-    const body = await request.json();
+
+    if (!id) {
+      return NextResponse.json(
+        { error: "School ID is required." },
+        { status: 400 },
+      );
+    }
+
+    let body: { expiryDate?: unknown };
+
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Please provide a valid request body." },
+        { status: 400 },
+      );
+    }
 
     const expiryDate =
       typeof body.expiryDate === "string"
         ? body.expiryDate.trim()
         : "";
 
+    if (!expiryDate) {
+      return NextResponse.json(
+        {
+          error:
+            "An expiry date is required. A school cannot have unlimited access.",
+        },
+        { status: 400 },
+      );
+    }
+
+    const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(expiryDate);
+
+    if (!dateMatch) {
+      return NextResponse.json(
+        { error: "Expiry date must use YYYY-MM-DD format." },
+        { status: 400 },
+      );
+    }
+
+    const year = Number(dateMatch[1]);
+    const month = Number(dateMatch[2]);
+    const day = Number(dateMatch[3]);
+
+    const calendarDate = new Date(Date.UTC(year, month - 1, day));
+
+    const isRealDate =
+      calendarDate.getUTCFullYear() === year &&
+      calendarDate.getUTCMonth() === month - 1 &&
+      calendarDate.getUTCDate() === day;
+
+    if (!isRealDate) {
+      return NextResponse.json(
+        { error: "Please provide a real calendar date." },
+        { status: 400 },
+      );
+    }
+
     const school = await prisma.school.findUnique({
-      where: {
-        id,
-      },
+      where: { id },
+      select: { id: true },
     });
 
     if (!school) {
       return NextResponse.json(
-        {
-          error: "School not found.",
-        },
-        { status: 404 }
+        { error: "School not found." },
+        { status: 404 },
       );
     }
 
-    // An empty value clears the expiry date.
-    if (!expiryDate) {
-      const updatedSchool = await prisma.school.update({
-        where: {
-          id,
-        },
-        data: {
-          activationExpiryDate: null,
-        },
-        select: {
-          id: true,
-          name: true,
-          isActive: true,
-          activationExpiryDate: true,
-        },
-      });
-
-      return NextResponse.json({
-        message: "Activation expiry date cleared successfully.",
-        school: updatedSchool,
-      });
-    }
-
-    const parsedExpiryDate = new Date(`${expiryDate}T23:59:59`);
-
-    if (Number.isNaN(parsedExpiryDate.getTime())) {
-      return NextResponse.json(
-        {
-          error: "Please provide a valid expiry date.",
-        },
-        { status: 400 }
-      );
-    }
+    // The selected date is valid through 23:59:59.999 in Kenya (UTC+3).
+    const kenyaEndOfDayUtc =
+      Date.UTC(year, month - 1, day, 23, 59, 59, 999) -
+      KENYA_UTC_OFFSET_MS;
 
     const updatedSchool = await prisma.school.update({
-      where: {
-        id,
-      },
+      where: { id },
       data: {
-        activationExpiryDate: parsedExpiryDate,
+        activationExpiryDate: new Date(kenyaEndOfDayUtc),
       },
       select: {
         id: true,
@@ -107,20 +125,16 @@ export async function PATCH(
     });
 
     return NextResponse.json({
-      message: "Activation expiry date updated successfully.",
+      message:
+        "Expiry date saved using Kenya time. The school's active status has not been changed.",
       school: updatedSchool,
     });
   } catch (error) {
-    console.error(
-      "Error updating activation expiry date:",
-      error
-    );
+    console.error("Error updating school expiry date:", error);
 
     return NextResponse.json(
-      {
-        error: "Failed to update activation expiry date.",
-      },
-      { status: 500 }
+      { error: "Failed to update the expiry date." },
+      { status: 500 },
     );
   }
 }
