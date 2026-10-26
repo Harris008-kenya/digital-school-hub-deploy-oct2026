@@ -3,7 +3,6 @@ import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { verifyPassword } from "@/lib/password";
 import { prisma } from "@/lib/prisma";
-import { hasSchoolAccess } from "@/lib/school-activation";
 import { ADMINISTRATOR_SESSION_COOKIE } from "@/lib/administrator-session";
 import {
   checkLoginRateLimit,
@@ -108,7 +107,7 @@ export async function POST(request: Request) {
 
     // PLATFORM administrators must retain access to manage
     // schools, including inactive or expired schools.
-    if (administrator.role === "SCHOOL") {
+    if (administrator.role === "SCHOOL" || administrator.role === "BURSAR") {
       if (!administrator.schoolId) {
         return NextResponse.json(
           {
@@ -130,11 +129,11 @@ export async function POST(request: Request) {
         },
       });
 
-      if (!school || !hasSchoolAccess(school)) {
+      if (!school) {
         return NextResponse.json(
           {
             error:
-              "Your school is inactive or its activation has expired. Contact the Platform Administrator.",
+              "Your assigned school could not be found. Contact the Platform Administrator.",
           },
           { status: 403 },
         );

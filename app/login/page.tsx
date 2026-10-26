@@ -258,7 +258,7 @@ export default function LoginPage() {
           throw new Error(data.error || "Could not sign in");
         }
 
-        router.push("/admin");
+        router.push(data?.administrator?.role === "BURSAR" ? "/bursar" : "/admin");
       } catch (error) {
         console.error(
           "Administrator login error:",

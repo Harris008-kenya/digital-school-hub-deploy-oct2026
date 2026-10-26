@@ -1,4 +1,4 @@
-import { redirect } from "next/navigation";
+﻿import { redirect } from "next/navigation";
 import { getCurrentAdministrator } from "@/lib/administrator-session";
 
 export async function requirePlatformAdministrator() {
@@ -8,8 +8,16 @@ export async function requirePlatformAdministrator() {
     redirect("/login");
   }
 
-  if (administrator.role !== "PLATFORM") {
+  if (administrator.role === "BURSAR") {
+    redirect("/login");
+  }
+
+  if (administrator.role === "SCHOOL") {
     redirect("/admin");
+  }
+
+  if (administrator.role !== "PLATFORM") {
+    redirect("/login");
   }
 
   return administrator;

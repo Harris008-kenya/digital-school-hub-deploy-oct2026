@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 type AddAdministratorFormProps = {
   schoolId: string;
 };
+
+type AdministratorRole = "SCHOOL" | "BURSAR";
 
 export default function AddAdministratorForm({
   schoolId,
@@ -17,9 +19,13 @@ export default function AddAdministratorForm({
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState<AdministratorRole>("SCHOOL");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  const roleLabel =
+    role === "BURSAR" ? "Bursar" : "School Administrator";
 
   async function handleSubmit(
     event: FormEvent<HTMLFormElement>
@@ -42,6 +48,7 @@ export default function AddAdministratorForm({
           email,
           phone,
           password,
+          role,
         }),
       });
 
@@ -49,8 +56,7 @@ export default function AddAdministratorForm({
 
       if (!response.ok) {
         setError(
-          data.error ||
-            "Failed to create School Administrator"
+          data.error || `Failed to create ${roleLabel}`
         );
         return;
       }
@@ -59,9 +65,10 @@ export default function AddAdministratorForm({
       setEmail("");
       setPhone("");
       setPassword("");
+      setRole("SCHOOL");
 
       setSuccess(
-        "School Administrator created successfully."
+        data.message || `${roleLabel} created successfully.`
       );
 
       router.refresh();
@@ -92,18 +99,41 @@ export default function AddAdministratorForm({
     <div className="w-full max-w-xl rounded-2xl bg-slate-50 p-6 ring-1 ring-slate-200">
       <div className="mb-6">
         <h4 className="text-xl font-bold text-slate-900">
-          Add School Administrator
+          Add School Account
         </h4>
 
         <p className="mt-1 text-sm text-slate-500">
-          Create an administrator account for this school.
+          Create a School Administrator or Bursar account for this school.
         </p>
       </div>
 
-      <form
-        onSubmit={handleSubmit}
-        className="space-y-4"
-      >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label
+            htmlFor="administrator-role"
+            className="mb-1 block text-sm font-medium"
+          >
+            Account Role *
+          </label>
+
+          <select
+            id="administrator-role"
+            value={role}
+            onChange={(event) =>
+              setRole(event.target.value as AdministratorRole)
+            }
+            required
+            className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 outline-none focus:border-blue-600"
+          >
+            <option value="SCHOOL">School Administrator</option>
+            <option value="BURSAR">Bursar</option>
+          </select>
+
+          <p className="mt-1 text-xs text-slate-500">
+            Select the responsibilities assigned to this account.
+          </p>
+        </div>
+
         <div>
           <label
             htmlFor="administrator-name"
@@ -116,12 +146,10 @@ export default function AddAdministratorForm({
             id="administrator-name"
             type="text"
             value={name}
-            onChange={(event) =>
-              setName(event.target.value)
-            }
+            onChange={(event) => setName(event.target.value)}
             required
             className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 outline-none focus:border-blue-600"
-            placeholder="Enter administrator name"
+            placeholder="Enter full name"
           />
         </div>
 
@@ -137,9 +165,7 @@ export default function AddAdministratorForm({
             id="administrator-email"
             type="email"
             value={email}
-            onChange={(event) =>
-              setEmail(event.target.value)
-            }
+            onChange={(event) => setEmail(event.target.value)}
             required
             className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 outline-none focus:border-blue-600"
             placeholder="administrator@example.com"
@@ -158,9 +184,7 @@ export default function AddAdministratorForm({
             id="administrator-phone"
             type="tel"
             value={phone}
-            onChange={(event) =>
-              setPhone(event.target.value)
-            }
+            onChange={(event) => setPhone(event.target.value)}
             className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 outline-none focus:border-blue-600"
             placeholder="e.g. 0712345678"
           />
@@ -178,9 +202,7 @@ export default function AddAdministratorForm({
             id="administrator-password"
             type="password"
             value={password}
-            onChange={(event) =>
-              setPassword(event.target.value)
-            }
+            onChange={(event) => setPassword(event.target.value)}
             required
             minLength={8}
             className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 outline-none focus:border-blue-600"
@@ -204,15 +226,13 @@ export default function AddAdministratorForm({
           </div>
         )}
 
-        <div className="flex gap-3 pt-2">
+        <div className="flex flex-wrap gap-3 pt-2">
           <button
             type="submit"
             disabled={saving}
             className="rounded-lg bg-blue-700 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {saving
-              ? "Creating..."
-              : "Create Administrator"}
+            {saving ? "Creating..." : `Create ${roleLabel}`}
           </button>
 
           <button

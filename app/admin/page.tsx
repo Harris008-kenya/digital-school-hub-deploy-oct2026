@@ -12,10 +12,20 @@ export default async function AdminDashboard() {
     redirect("/login");
   }
 
+  if (administrator.role === "BURSAR") {
+    redirect("/login");
+  }
+
+  if (administrator.role !== "PLATFORM" && administrator.role !== "SCHOOL") {
+    redirect("/login");
+  }
+
   if (administrator.role === "PLATFORM") {
-    const schoolCount = await prisma.school.count();
-    const studentCount = await prisma.student.count();
-    const teacherCount = await prisma.teacher.count();
+    const [schoolCount, studentCount, teacherCount] = await Promise.all([
+      prisma.school.count(),
+      prisma.student.count(),
+      prisma.teacher.count(),
+    ]);
 
     return (
       <main className="min-h-screen bg-slate-50 text-slate-900">
@@ -170,7 +180,7 @@ export default async function AdminDashboard() {
               </Link>
 
               <Link
-                href="/admin/school-learning-resources"
+                href="/admin/learning-resources"
                 className="rounded-xl border border-slate-200 p-5 transition hover:border-blue-300 hover:bg-blue-50"
               >
                 <h4 className="font-bold text-blue-700">
@@ -212,7 +222,7 @@ export default async function AdminDashboard() {
 
         <footer className="border-t bg-white">
           <div className="mx-auto max-w-7xl px-6 py-6 text-center text-sm text-slate-500">
-            © 2026 Digital School Hub. All rights reserved.
+            Â© 2026 Digital School Hub. All rights reserved.
           </div>
         </footer>
       </main>
@@ -372,7 +382,7 @@ export default async function AdminDashboard() {
           </div>
         </div>
 
-        {school.isActive && (isSchoolExpired || isExpiryMissing) ? (
+        {school.isActive && (isSchoolExpired || isExpiryMissing) && (
           <div className="mb-8 rounded-2xl bg-red-50 p-8 text-center ring-1 ring-red-200">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-xl font-bold text-red-700">
               !
@@ -385,7 +395,9 @@ export default async function AdminDashboard() {
             </h3>
 
             <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-red-800">
-              {isExpiryMissing ? "The Platform Administrator must set an expiry date before this school can use school management functions." : "Your school's activation period has expired. School management functions are currently locked."}
+              {isExpiryMissing
+                ? "Your school's expiry date is not set. Submit a renewal payment below. School management will remain locked until the Platform Administrator approves the payment."
+                : "Your school's activation period has expired. School management functions are locked. Submit a renewal payment below and wait for Platform Administrator approval."}
             </p>
 
             {school.activationExpiryDate && (
@@ -394,18 +406,12 @@ export default async function AdminDashboard() {
                 {school.activationExpiryDate.toLocaleString()}
               </p>
             )}
-
-            <p className="mx-auto mt-4 max-w-2xl text-sm leading-6 text-red-800">
-              Please contact the Platform Administrator to have
-              your school's activation period extended.
-            </p>
-          </div>
-        ) : (
-          <div className="mb-8">
-            <ActivationPaymentForm isActive={isSchoolActive} />
           </div>
         )}
 
+        <div className="mb-8">
+          <ActivationPaymentForm isActive={isSchoolActive} />
+        </div>
         {isSchoolActive ? (
           <>
             <div className="mb-8 grid gap-6 md:grid-cols-4">
@@ -636,7 +642,7 @@ export default async function AdminDashboard() {
 
       <footer className="border-t bg-white">
         <div className="mx-auto max-w-7xl px-6 py-6 text-center text-sm text-slate-500">
-          © 2026 Digital School Hub. All rights reserved.
+          Â© 2026 Digital School Hub. All rights reserved.
         </div>
       </footer>
     </main>

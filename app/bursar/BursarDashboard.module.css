@@ -1,0 +1,80 @@
+.portal {
+  color: #172033;
+  background-color: #ffffff;
+  color-scheme: light;
+}
+
+.portal :global(.text-slate-400),
+.portal :global(.text-slate-500),
+.portal :global(.text-slate-600),
+.portal :global(.text-gray-400),
+.portal :global(.text-gray-500),
+.portal :global(.text-gray-600) {
+  color: #334155 !important;
+}
+
+.portal :global(.text-slate-700),
+.portal :global(.text-gray-700) {
+  color: #1e293b !important;
+}
+
+.portal :global(.text-slate-800),
+.portal :global(.text-gray-800),
+.portal :global(.text-slate-900),
+.portal :global(.text-gray-900) {
+  color: #0f172a !important;
+}
+
+.portal input:not([type="checkbox"]):not([type="radio"]),
+.portal select,
+.portal textarea {
+  color: #111827;
+  background-color: #ffffff;
+  border: 1px solid #64748b;
+}
+
+.portal input::placeholder,
+.portal textarea::placeholder {
+  color: #64748b;
+  opacity: 1;
+}
+
+.portal input:focus,
+.portal select:focus,
+.portal textarea:focus {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 1px;
+  border-color: #1d4ed8;
+}
+
+.portal table {
+  color: #172033;
+  border-color: #cbd5e1;
+}
+
+.portal thead th {
+  color: #0f172a;
+  background-color: #e2e8f0;
+  font-weight: 700;
+}
+
+.portal tbody tr:nth-child(even) {
+  background-color: #f8fafc;
+}
+
+.portal tbody tr:hover {
+  background-color: #eff6ff;
+}
+
+.portal :global(a:focus-visible),
+.portal button:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 2px;
+}
+
+@media print {
+  .portal {
+    color: #000000;
+    background: #ffffff;
+  }
+}

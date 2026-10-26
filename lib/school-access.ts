@@ -1,5 +1,4 @@
-
-import { redirect } from "next/navigation";
+﻿import { redirect } from "next/navigation";
 import { getCurrentAdministrator } from "@/lib/administrator-session";
 import { prisma } from "@/lib/prisma";
 import { hasSchoolAccess } from "@/lib/school-activation";
@@ -11,9 +10,20 @@ export async function requireActiveSchoolAdministrator() {
     redirect("/login");
   }
 
+  // Bursars must not access School Admin pages.
+  // Keep them at login until the Bursar portal is ready.
+  if (administrator.role === "BURSAR") {
+    redirect("/login");
+  }
+
   // Platform administrators manage schools and their activation.
   if (administrator.role === "PLATFORM") {
     return administrator;
+  }
+
+  // Only School Administrators may continue.
+  if (administrator.role !== "SCHOOL") {
+    redirect("/login");
   }
 
   if (!administrator.schoolId) {

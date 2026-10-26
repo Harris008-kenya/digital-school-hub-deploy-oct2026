@@ -1,5 +1,4 @@
-
-import { getCurrentAdministrator } from "@/lib/administrator-session";
+﻿import { getCurrentAdministrator } from "@/lib/administrator-session";
 import { prisma } from "@/lib/prisma";
 import { hasSchoolAccess } from "@/lib/school-activation";
 
@@ -14,11 +13,27 @@ export async function getActiveSchoolAdministrator() {
     };
   }
 
+  if (administrator.role === "BURSAR") {
+    return {
+      administrator: null,
+      error: "Bursar accounts cannot access School Administrator APIs",
+      status: 403,
+    };
+  }
+
   if (administrator.role === "PLATFORM") {
     return {
       administrator,
       error: null,
       status: 200,
+    };
+  }
+
+  if (administrator.role !== "SCHOOL") {
+    return {
+      administrator: null,
+      error: "This account is not authorized to access school records",
+      status: 403,
     };
   }
 
