@@ -1,5 +1,6 @@
-"use client";
+﻿"use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 type TeacherAssignment = {
@@ -46,6 +47,8 @@ export default function TeacherDashboard() {
 
   const [error, setError] = useState("");
 
+  const [schoolSubjects, setSchoolSubjects] = useState<{ id: string; name: string }[]>([]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -54,7 +57,7 @@ export default function TeacherDashboard() {
         setLoading(true);
         setError("");
 
-        const response = await fetch("/api/auth/me", {
+        const response = await fetch("/api/auth/teacher-me", {
           method: "GET",
           credentials: "include",
           cache: "no-store",
@@ -87,6 +90,27 @@ export default function TeacherDashboard() {
 
         if (!cancelled) {
           setTeacher(data.teacher);
+
+          try {
+            const subjectsResponse = await fetch("/api/subjects", {
+              method: "GET",
+              credentials: "include",
+              cache: "no-store",
+            });
+
+            if (subjectsResponse.ok) {
+              const subjectsData = await subjectsResponse.json();
+              const subjects = Array.isArray(subjectsData)
+                ? subjectsData
+                : subjectsData?.subjects;
+
+              if (!cancelled && Array.isArray(subjects)) {
+                setSchoolSubjects(subjects);
+              }
+            }
+          } catch (subjectsError) {
+            console.error("Error loading school-configured subjects:", subjectsError);
+          }
         }
       } catch (err) {
         console.error(
@@ -114,25 +138,10 @@ export default function TeacherDashboard() {
     };
   }, []);
 
-  const uniqueSubjects = useMemo(() => {
-    if (!teacher) {
-      return [];
-    }
-
-    const subjects = new Map<
-      string,
-      string
-    >();
-
-    for (const assignment of teacher.assignments) {
-      subjects.set(
-        assignment.subject.id,
-        assignment.subject.name
-      );
-    }
-
-    return Array.from(subjects.values()).sort();
-  }, [teacher]);
+  const uniqueSubjects = useMemo(
+    () => schoolSubjects.map((subject) => subject.name),
+    [schoolSubjects]
+  );
 
   const uniqueClasses = useMemo(() => {
     if (!teacher) {
@@ -193,12 +202,12 @@ export default function TeacherDashboard() {
             </p>
           </div>
 
-          <a
+          <Link
             href="/"
             className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-100"
           >
             Home
-          </a>
+          </Link>
         </div>
       </header>
 
@@ -253,8 +262,7 @@ export default function TeacherDashboard() {
 
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="text-3xl">📚</div>
-
+            <div className="text-3xl">&#128197;</div>
             <h3 className="mt-4 text-xl font-bold">
               My Classes
             </h3>
@@ -272,8 +280,7 @@ export default function TeacherDashboard() {
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="text-3xl">📖</div>
-
+            <div className="text-3xl">&#128218;</div>
             <h3 className="mt-4 text-xl font-bold">
               My Subjects
             </h3>
@@ -291,8 +298,7 @@ export default function TeacherDashboard() {
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="text-3xl">📝</div>
-
+            <div className="text-3xl">&#9997;</div>
             <h3 className="mt-4 text-xl font-bold">
               Enter Marks
             </h3>
@@ -311,8 +317,7 @@ export default function TeacherDashboard() {
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="text-3xl">📝</div>
-
+            <div className="text-3xl">&#128221;</div>
             <h3 className="mt-4 text-xl font-bold">
               My Quizzes
             </h3>
@@ -322,17 +327,16 @@ export default function TeacherDashboard() {
               grades and subjects.
             </p>
 
-            <a
+            <Link
               href="/teacher/my-quizzes"
               className="mt-5 inline-block rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800"
             >
               Open
-            </a>
+            </Link>
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="text-3xl">📊</div>
-
+            <div className="text-3xl">&#128202;</div>
             <h3 className="mt-4 text-xl font-bold">
               Final Results
             </h3>
@@ -351,8 +355,7 @@ export default function TeacherDashboard() {
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="text-3xl">👨‍🏫</div>
-
+            <div className="text-3xl">&#128101;</div>
             <h3 className="mt-4 text-xl font-bold">
               Students
             </h3>
@@ -370,8 +373,7 @@ export default function TeacherDashboard() {
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="text-3xl">📢</div>
-
+            <div className="text-3xl">&#128227;</div>
             <h3 className="mt-4 text-xl font-bold">
               Announcements
             </h3>
@@ -390,8 +392,7 @@ export default function TeacherDashboard() {
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="text-3xl">📚</div>
-
+            <div className="text-3xl">&#128214;</div>
             <h3 className="mt-4 text-xl font-bold">
               Learning Resources
             </h3>
@@ -506,7 +507,7 @@ export default function TeacherDashboard() {
 
       <footer className="border-t bg-white">
         <div className="mx-auto max-w-7xl px-6 py-6 text-center text-sm text-slate-500">
-          © 2026 Digital School Hub. All rights reserved.
+        &#169; 2026 Digital School Hub. All rights reserved.
         </div>
       </footer>
     </main>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentTeacher } from "@/lib/teacher-session";
+import { prisma } from "@/lib/prisma";
 
 export default async function TeacherMySubjectsPage() {
   const teacher = await getCurrentTeacher();
@@ -8,6 +9,29 @@ export default async function TeacherMySubjectsPage() {
   if (!teacher) {
     redirect("/login");
   }
+
+  const configuredGradeSubjects = await prisma.gradeSubject.findMany({
+    where: {
+      grade: {
+        schoolId: teacher.schoolId,
+      },
+    },
+    select: {
+      grade: {
+        select: {
+          id: true,
+          name: true,
+          level: true,
+        },
+      },
+      subject: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  });
 
   const subjectMap = new Map<
     string,
@@ -31,9 +55,9 @@ export default async function TeacherMySubjectsPage() {
     }
   >();
 
-  for (const assignment of teacher.assignments) {
-    const subject = assignment.subject;
-    const grade = assignment.grade;
+  for (const item of configuredGradeSubjects) {
+    const subject = item.subject;
+    const grade = item.grade;
 
     gradeMap.set(grade.id, {
       id: grade.id,
@@ -86,7 +110,7 @@ export default async function TeacherMySubjectsPage() {
 
   const subjectCount = subjects.length;
   const gradeCount = grades.length;
-  const assignmentCount = teacher.assignments.length;
+  const assignmentCount = configuredGradeSubjects.length;
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
@@ -149,7 +173,7 @@ export default async function TeacherMySubjectsPage() {
             </p>
 
             <p className="mt-1 text-sm text-slate-500">
-              Unique subjects assigned
+              Unique subjects offered by your school
             </p>
           </div>
 
@@ -163,13 +187,13 @@ export default async function TeacherMySubjectsPage() {
             </p>
 
             <p className="mt-1 text-sm text-slate-500">
-              Unique grades assigned
+              Grades configured by your school
             </p>
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <p className="text-sm font-medium text-slate-500">
-              Assignments
+              Grade-Subject Combinations
             </p>
 
             <p className="mt-2 text-3xl font-bold text-slate-800">
@@ -177,19 +201,19 @@ export default async function TeacherMySubjectsPage() {
             </p>
 
             <p className="mt-1 text-sm text-slate-500">
-              Subject-to-grade assignments
+              Configured combinations across your school&apos;s grades
             </p>
           </div>
         </div>
 
         <div className="mb-8">
           <h3 className="text-2xl font-bold text-slate-900">
-            Subjects Assigned to Me
+            Subjects Offered by My School
           </h3>
 
           <p className="mt-2 text-sm text-slate-600">
-            These subjects and grades are based on your current
-            teacher assignments.
+            These subjects and grades are based on the subjects configured
+            for your school.
           </p>
         </div>
 
@@ -200,7 +224,7 @@ export default async function TeacherMySubjectsPage() {
             </h3>
 
             <p className="mt-2 text-sm text-slate-500">
-              You have not been assigned any subjects yet. Please
+              Your school has not configured any subjects yet. Please
               contact the School Administrator.
             </p>
           </div>
@@ -212,7 +236,7 @@ export default async function TeacherMySubjectsPage() {
                 className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200"
               >
                 <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-100 text-2xl">
-                  📚
+                  {"\u{1F4DA}"}
                 </div>
 
                 <h4 className="mt-5 text-xl font-bold text-slate-900">
@@ -251,7 +275,7 @@ export default async function TeacherMySubjectsPage() {
 
       <footer className="border-t bg-white">
         <div className="mx-auto max-w-7xl px-6 py-6 text-center text-sm text-slate-500">
-          © 2026 Digital School Hub. All rights reserved.
+          {"\u00A9"} 2026 Digital School Hub. All rights reserved.
         </div>
       </footer>
     </main>
