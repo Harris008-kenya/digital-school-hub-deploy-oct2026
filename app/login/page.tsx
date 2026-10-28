@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
@@ -70,7 +71,7 @@ export default function LoginPage() {
     setMessage("");
 
     if (
-      (newRole === "Student" || newRole === "Parent") &&
+      (newRole === "Student" || newRole === "Parent" || newRole === "Teacher") &&
       schools.length === 0
     ) {
       loadSchools();
@@ -119,7 +120,7 @@ export default function LoginPage() {
           throw new Error(data.error || "Could not sign in");
         }
 
-        window.location.href = "/student";
+        router.push("/student");
       } catch (error) {
         console.error("Student login error:", error);
 
@@ -182,9 +183,9 @@ export default function LoginPage() {
     }
 
     if (role === "Teacher") {
-      if (!email.trim() || !password) {
+      if (!schoolId || !email.trim() || !password) {
         setMessage(
-          "Please enter your registered email address and password."
+          "Please select your school and enter your registered email address and password."
         );
         return;
       }
@@ -199,6 +200,7 @@ export default function LoginPage() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
+            schoolId,
             email: email.trim(),
             password,
           }),
@@ -581,6 +583,38 @@ export default function LoginPage() {
             {(role === "Teacher" ||
               role === "Administrator") && (
               <div>
+                {role === "Teacher" && (
+                  <div className="mb-5">
+                    <label
+                      htmlFor="teacherSchool"
+                      className="mb-2 block text-sm font-semibold text-slate-700"
+                    >
+                      School
+                    </label>
+                    <select
+                      id="teacherSchool"
+                      required
+                      value={schoolId}
+                      onChange={(e) => setSchoolId(e.target.value)}
+                      onFocus={() => {
+                        if (schools.length === 0) loadSchools();
+                      }}
+                      disabled={loadingSchools}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                    >
+                      <option value="">
+                        {loadingSchools
+                          ? "Loading registered schools..."
+                          : "Select your school"}
+                      </option>
+                      {schools.map((school) => (
+                        <option key={school.id} value={school.id}>
+                          {school.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label
                     htmlFor="email"
@@ -647,7 +681,7 @@ export default function LoginPage() {
           )}
 
           <div className="mt-6 text-center text-sm text-slate-500">
-            <p>Don't have an account?</p>
+            <p>Don&apos;t have an account?</p>
 
             <button
               type="button"
@@ -663,12 +697,9 @@ export default function LoginPage() {
           </div>
 
           <div className="mt-6 text-center">
-            <a
-              href="/"
-              className="text-sm font-medium text-slate-500 hover:text-blue-700"
-            >
+            <Link href="/" className="text-sm font-medium text-slate-500 hover:text-blue-700">
               ← Back Home
-            </a>
+            </Link>
           </div>
         </div>
       </section>

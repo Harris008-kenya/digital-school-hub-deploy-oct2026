@@ -17,6 +17,7 @@ const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 export async function POST(request: Request) {
   try {
     let body: {
+      schoolId?: unknown;
       email?: unknown;
       password?: unknown;
     };
@@ -30,6 +31,9 @@ export async function POST(request: Request) {
       );
     }
 
+    const schoolId =
+      typeof body.schoolId === "string" ? body.schoolId.trim() : "";
+
     const email =
       typeof body.email === "string"
         ? body.email.trim().toLowerCase()
@@ -40,9 +44,9 @@ export async function POST(request: Request) {
         ? body.password
         : "";
 
-    if (!email || !password) {
+    if (!schoolId || !email || !password) {
       return NextResponse.json(
-        { error: "Email and password are required." },
+        { error: "School, email and password are required." },
         { status: 400 },
       );
     }
@@ -72,8 +76,8 @@ export async function POST(request: Request) {
       return response;
     }
 
-    const teacher = await prisma.teacher.findUnique({
-      where: { email },
+    const teacher = await prisma.teacher.findFirst({
+      where: { schoolId, email },
       include: {
         school: {
           select: {
